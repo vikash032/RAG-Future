@@ -1,6 +1,4 @@
-# Ensure Chroma picks up modern SQLite
-import pysqlite3 as sqlite3
-import sys; sys.modules['sqlite3'] = sqlite3
+
 
 import streamlit as st
 import os
