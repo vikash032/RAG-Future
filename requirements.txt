@@ -36,6 +36,7 @@ duckdb
 dlt  
 opencv-python<4.12  
 chromadb
+pysqlite3-binary
 
 
 # Custom embedding package (FlagEmbedding)
