@@ -1,8 +1,11 @@
-# Core Libraries
+# use CPU wheels for PyTorch
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 torch==2.2.2
-torchvision
-torchaudio
-streamlit
+torchvision==0.16.2
+torchaudio==2.2.2
+
+streamlit==1.48.1
 chromadb
 requests
 pandas
@@ -16,20 +19,17 @@ pi-heif
 pdf2image
 pillow-heif
 python-magic
-Duckdb
-Spacy
-langgraph
+duckdb
+spacy
 dlt
-opencv-python<4.12  # Avoid 4.12+ due to compatibility issues
-
-numpy==1.26.4               # Compatible with torch & transformers
-transformers==4.44.2        # Pinned for compatibility with sentence-transformers
+opencv-python<4.12
+numpy==1.26.4
+transformers==4.44.2
 sentence-transformers==2.2.2
-setfit==0.7.0               # Works with sentence-transformers 2.2.2
+setfit==0.7.0
 onnxruntime
-
-# HuggingFace Ecosystem
 optimum
 huggingface_hub==0.23.3
 
-FlagEmbedding @ git+https://github.com/FlagOpen/FlagEmbedding.git
+# git package (if needed)
+git+https://github.com/FlagOpen/FlagEmbedding.git
