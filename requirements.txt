@@ -30,12 +30,13 @@ langchain
 unstructured[local-inference]
 pdfminer.six
 pi-heif
-pdf2image
-pillow-heif
-python-magic
-duckdb
-dlt
-opencv-python<4.12
+pdf2image 
+pillow-heif  
+python-magic  
+duckdb  
+dlt  
+opencv-python<4.12  
+
 
 # Custom embedding package (FlagEmbedding)
 git+https://github.com/FlagOpen/FlagEmbedding.git
