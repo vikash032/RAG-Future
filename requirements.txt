@@ -35,7 +35,6 @@ python-magic
 duckdb  
 dlt  
 opencv-python<4.12  
-pysqlite3-binary>=3.35.0
 chromadb
 
 
