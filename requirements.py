@@ -19,7 +19,6 @@ langgraph
 dlt
 opencv-python<4.12  # Avoid 4.12+ due to compatibility issues
 
-# Compatibility-pinned Libraries
 numpy==1.26.4               # Compatible with torch & transformers
 torch==2.2.2                # Fully compatible with numpy 1.26.4
 transformers==4.44.2        # Pinned for compatibility with sentence-transformers
