@@ -1,3 +1,19 @@
+import streamlit as st
+import os
+import requests
+import uuid
+import gc
+import numpy as np
+import pandas as pd
+
+# Lazy / guarded import for torch so deployment doesn't crash if pip install is still running
+try:
+    import torch
+except Exception as e:
+    torch = None
+    st.warning("PyTorch not available yet. Model features will be disabled until torch is installed.")
+    # optionally: st.error(str(e))
+
 import os
 import requests
 import uuid
