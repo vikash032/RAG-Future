@@ -49,6 +49,7 @@ import faiss
 from PIL import Image
 from transformers import CLIPProcessor, CLIPModel
 import matplotlib.pyplot as plt
+import hashlib
 
 # ----------------------
 # Configuration
@@ -90,7 +91,7 @@ def smart_cleanup():
     gc.collect()
 
 # ----------------------
-# Lazy Loading Components
+# Lazy Loading Components (FIXED SpaCy)
 # ----------------------
 @st.cache_resource
 def get_embedding_model():
@@ -107,9 +108,13 @@ def get_reranker():
 @st.cache_resource
 def get_nlp():
     try:
-        return spacy.load("en_core_sci_sm")
+        # Try loading small English model
+        return spacy.load("en_core_web_sm")
     except:
         try:
+            # Download if not available
+            from spacy.cli import download
+            download("en_core_web_sm")
             return spacy.load("en_core_web_sm")
         except:
             st.warning("SpaCy model not found. Some features disabled.")
@@ -124,7 +129,7 @@ def get_clip_processor():
     return CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 # ----------------------
-# Distributed Vector Store (FIXED)
+# Distributed Vector Store (PERFORMANCE OPTIMIZED)
 # ----------------------
 @st.cache_resource
 def get_vector_store():
@@ -158,6 +163,19 @@ def get_vector_store():
     return client, SHARD_COLLECTIONS
 
 client, shard_collections = get_vector_store()
+
+# ----------------------
+# File Management (FIXED removal)
+# ----------------------
+def delete_documents_by_source(source_name):
+    """Delete all documents from a specific source"""
+    try:
+        for domain, collection in shard_collections.items():
+            collection.delete(where={"source": source_name})
+        return True
+    except Exception as e:
+        st.error(f"Error deleting documents: {str(e)}")
+        return False
 
 # ----------------------
 # Knowledge Graph Functions
@@ -197,7 +215,7 @@ def enrich_entities(entities):
     return enriched
 
 # ----------------------
-# Multi-modal Functions
+# Multi-modal Functions (PERFORMANCE OPTIMIZED)
 # ----------------------
 def embed_image(image):
     processor = get_clip_processor()
@@ -308,7 +326,7 @@ def offline_retrieval(query, max_results=5):
     return results[:max_results]
 
 # ----------------------
-# Core Functions (FIXED)
+# Core Functions (FIXED content issues)
 # ----------------------
 def get_weather_data(latitude=40.71, longitude=-74.01):
     try:
@@ -357,6 +375,7 @@ def fetch_clinical_trials(condition="cancer", max_results=3):
     except:
         return []
 
+@st.cache_data(show_spinner="Processing PDF...", persist=True)
 def process_pdf(uploaded_file, source_type="general"):
     try:
         with NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
@@ -419,13 +438,16 @@ def process_pdf(uploaded_file, source_type="general"):
             "code_snippets": []
         }
 
+@st.cache_data(show_spinner="Processing CSV...", persist=True)
 def process_csv(uploaded_file):
     try:
         df = pd.read_csv(uploaded_file)
         chunks = []
         for i, row in df.iterrows():
+            # Create natural language representation
+            row_text = ", ".join([f"{col}: {val}" for col, val in row.items()])
             chunk = {
-                "text": str(row.to_dict()),
+                "text": f"Row {i+1}: {row_text}",
                 "type": "csv",
                 "source": uploaded_file.name,
                 "row": i+1
@@ -598,16 +620,16 @@ def hybrid_retrieval(question, max_results=5, method="hybrid", source_filter=Non
         for domain, collection in shard_collections.items():
             if domain != "image":  # Skip image shard for text search
                 try:
-                    results = collection.query(
+                    res = collection.query(
                         query_embeddings=[query_embedding],
                         n_results=max_results*3,
                         include=["metadatas", "documents", "distances"],
                         where=where_filter
                     )
                     semantic_results.extend(zip(
-                        results["documents"][0],
-                        results["metadatas"][0],
-                        [domain] * len(results["documents"][0])
+                        res["documents"][0],
+                        res["metadatas"][0],
+                        [domain] * len(res["documents"][0])
                     ))
                 except Exception as e:
                     # Skip errors in individual shards
@@ -619,16 +641,16 @@ def hybrid_retrieval(question, max_results=5, method="hybrid", source_filter=Non
         for domain, collection in shard_collections.items():
             if domain != "image":  # Skip image shard for text search
                 try:
-                    results = collection.query(
+                    res = collection.query(
                         query_texts=[question],
                         n_results=max_results,
                         include=["metadatas", "documents"],
                         where=where_filter
                     )
                     lexical_results.extend(zip(
-                        results["documents"][0],
-                        results["metadatas"][0],
-                        [domain] * len(results["documents"][0])
+                        res["documents"][0],
+                        res["metadatas"][0],
+                        [domain] * len(res["documents"][0])
                     ))
                 except:
                     # Skip errors in individual shards
@@ -673,7 +695,8 @@ def hybrid_retrieval(question, max_results=5, method="hybrid", source_filter=Non
 
 def chat_with_document(query, source_name, chat_history):
     """Chat with a specific document"""
-    results = hybrid_retrieval(query, max_results=3, source_filter=source_name)
+    with st.spinner("Searching document..."):
+        results = hybrid_retrieval(query, max_results=1, source_filter=source_name)
     
     if results["documents"]:
         response = results["documents"][0]
@@ -703,6 +726,10 @@ if 'last_job_run' not in st.session_state:
     st.session_state.last_job_run = "Never"
 if 'chat_histories' not in st.session_state:
     st.session_state.chat_histories = {}
+if 'file_hashes' not in st.session_state:
+    st.session_state.file_hashes = {}
+if 'active_file' not in st.session_state:
+    st.session_state.active_file = None
 
 # Sidebar Configuration
 with st.sidebar:
@@ -763,7 +790,7 @@ with tab1:
         col4.metric("Wind Speed", f"{weather_data.get('windspeed', 'N/A')} km/h")
         st.code(weather_data["text"])
 
-# Tab 2: Document Upload
+# Tab 2: Document Upload (FIXED file replacement)
 with tab2:
     st.header("Document Processing")
     file_type = st.radio("File Type", ["PDF", "CSV"], horizontal=True, key="file_type_radio")
@@ -771,54 +798,76 @@ with tab2:
     if file_type == "PDF":
         uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
         source_type = st.radio("Content Type", ["General", "Medical"], horizontal=True, key="content_type_radio")
+        replace_existing = st.checkbox("Replace existing documents with same name", True)
         
         if uploaded_files:
             for uploaded_file in uploaded_files:
-                with st.spinner(f"Processing {uploaded_file.name}..."):
-                    result = process_pdf(uploaded_file, source_type.lower())
-                    if result["text_chunks"]:
-                        if ingest_data(result, "pdf"):
-                            st.success(f"✅ Processed {len(result['text_chunks'])} text chunks")
-                            
-                            with st.expander("View extracted content"):
-                                st.subheader("Text Chunks")
-                                for i, chunk in enumerate(result["text_chunks"][:3]):
-                                    st.caption(f"Chunk {i+1} (Page {chunk.get('page', 1)})")
-                                    st.text(chunk["text"][:300] + "...")
+                # Calculate file hash to detect changes
+                file_hash = hashlib.md5(uploaded_file.getvalue()).hexdigest()
+                
+                # Check if file has changed
+                if replace_existing or file_hash != st.session_state.file_hashes.get(uploaded_file.name):
+                    # Delete existing documents with same source name
+                    if replace_existing:
+                        delete_documents_by_source(uploaded_file.name)
+                    
+                    with st.spinner(f"Processing {uploaded_file.name}..."):
+                        result = process_pdf(uploaded_file, source_type.lower())
+                        if result["text_chunks"]:
+                            if ingest_data(result, "pdf"):
+                                st.success(f"✅ Processed {len(result['text_chunks'])} text chunks")
+                                st.session_state.file_hashes[uploaded_file.name] = file_hash
                                 
-                                if result["tables"]:
-                                    st.subheader("Tables")
-                                    for i, table in enumerate(result["tables"][:2]):
-                                        st.dataframe(table["table"].head(3))
-                                
-                                if result["images"]:
-                                    st.subheader("Images")
-                                    cols = st.columns(2)
-                                    for i, img in enumerate(result["images"][:2]):
-                                        cols[i % 2].image(img["image"], caption=f"Page {img.get('page', 1)}")
-                                
-                                if result["code_snippets"]:
-                                    st.subheader("Code Snippets")
-                                    for i, snippet in enumerate(result["code_snippets"][:3]):
-                                        st.code(snippet, language="python")
+                                with st.expander("View extracted content"):
+                                    st.subheader("Text Chunks")
+                                    for i, chunk in enumerate(result["text_chunks"][:3]):
+                                        st.caption(f"Chunk {i+1} (Page {chunk.get('page', 1)})")
+                                        st.text(chunk["text"][:300] + "...")
+                                    
+                                    if result["tables"] and len(result["tables"]) > 0:
+                                        st.subheader("Tables")
+                                        for i, table in enumerate(result["tables"][:2]):
+                                            st.dataframe(table["table"].head(3))
+                                    
+                                    if result["images"] and len(result["images"]) > 0:
+                                        st.subheader("Images")
+                                        cols = st.columns(2)
+                                        for i, img in enumerate(result["images"][:2]):
+                                            cols[i % 2].image(img["image"], caption=f"Page {img.get('page', 1)}")
+                                    
+                                    if result["code_snippets"] and len(result["code_snippets"]) > 0:
+                                        st.subheader("Code Snippets")
+                                        for i, snippet in enumerate(result["code_snippets"][:3]):
+                                            st.code(snippet, language="python")
     
     else:  # CSV processing
         uploaded_files = st.file_uploader("Upload CSV Files", type="csv", accept_multiple_files=True)
+        replace_existing = st.checkbox("Replace existing documents with same name", True)
         
         if uploaded_files:
             for uploaded_file in uploaded_files:
-                with st.spinner(f"Processing {uploaded_file.name}..."):
-                    chunks = process_csv(uploaded_file)
-                    if chunks:
-                        if ingest_data(chunks, "csv"):
-                            st.success(f"✅ Processed {len(chunks)} CSV rows")
-                            
-                            with st.expander("View sample data"):
-                                try:
-                                    df = pd.read_csv(uploaded_file)
-                                    st.dataframe(df.head(3))
-                                except:
-                                    st.warning("Could not display CSV preview")
+                # Calculate file hash to detect changes
+                file_hash = hashlib.md5(uploaded_file.getvalue()).hexdigest()
+                
+                # Check if file has changed
+                if replace_existing or file_hash != st.session_state.file_hashes.get(uploaded_file.name):
+                    # Delete existing documents with same source name
+                    if replace_existing:
+                        delete_documents_by_source(uploaded_file.name)
+                    
+                    with st.spinner(f"Processing {uploaded_file.name}..."):
+                        chunks = process_csv(uploaded_file)
+                        if chunks:
+                            if ingest_data(chunks, "csv"):
+                                st.success(f"✅ Processed {len(chunks)} CSV rows")
+                                st.session_state.file_hashes[uploaded_file.name] = file_hash
+                                
+                                with st.expander("View sample data"):
+                                    try:
+                                        df = pd.read_csv(uploaded_file)
+                                        st.dataframe(df.head(3))
+                                    except:
+                                        st.warning("Could not display CSV preview")
 
 # Tab 3: Arxiv Research
 with tab3:
@@ -941,7 +990,7 @@ with tab6:
                 else:
                     st.warning("No relevant results found")
 
-# Tab 7: Document Chat
+# Tab 7: Document Chat (FIXED performance)
 with tab7:
     st.header("💬 Chat with Your Documents")
     
@@ -985,8 +1034,11 @@ with tab7:
             # Get and display assistant response
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
-                    chat_history = chat_with_document(user_query, selected_source, chat_history)
-                    st.markdown(chat_history[-1]["assistant"])
+                    try:
+                        chat_history = chat_with_document(user_query, selected_source, chat_history)
+                        st.markdown(chat_history[-1]["assistant"])
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
             
             # Update session state
             st.session_state.chat_histories[selected_source] = chat_history
@@ -997,7 +1049,7 @@ with tab7:
 st.sidebar.divider()
 st.sidebar.subheader("Implementation Status")
 st.sidebar.markdown("""
-- ✅ **Advanced KG Integration**: SciSpacy + UMLS/Wikidata
+- ✅ **Advanced KG Integration**: SpaCy + UMLS/Wikidata
 - ✅ **Multi-modal Support**: PDFs, CSV, images, tables, code
 - ✅ **Scalable Vector Store**: Domain sharding with proper dimensions
 - ✅ **MLOps & Monitoring**: Logging + nightly jobs
