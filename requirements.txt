@@ -29,6 +29,7 @@ streamlit==1.48.1
 chromadb
 requests
 pandas
+schedule
 regex
 arxiv
 datasets
