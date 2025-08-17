@@ -1,4 +1,7 @@
-
+# Fix SQLite for Chroma - YE LINES SABSE UPAR HONI CHAHIYE
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 import streamlit as st
 import os
@@ -16,13 +19,6 @@ except Exception as e:
     st.warning("PyTorch not available yet. Model features will be disabled until torch is installed.")
     # optionally: st.error(str(e))
 
-import os
-import requests
-import uuid
-import torch
-import gc
-import numpy as np
-import pandas as pd
 import arxiv
 import duckdb
 import streamlit as st
