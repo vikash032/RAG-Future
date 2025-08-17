@@ -1,34 +1,22 @@
-# Fix SQLite for Chroma - YE LINES SABSE UPAR HONI CHAHIYE
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-
-import streamlit as st
-import os
-import requests
-import uuid
-import gc
-import numpy as np
-import pandas as pd
-
 # Lazy / guarded import for torch so deployment doesn't crash if pip install is still running
 try:
-    import torch
-except Exception as e:
+    import torch as _torch
+    torch = _torch
+except Exception:
     torch = None
     st.warning("PyTorch not available yet. Model features will be disabled until torch is installed.")
-    # optionally: st.error(str(e))
 
-import os
-import requests
-import uuid
-import torch
-import gc
-import numpy as np
-import pandas as pd
+# Only set default tensor type if torch is available
+if torch is not None:
+    try:
+        torch.set_default_tensor_type(torch.FloatTensor)
+    except Exception:
+        # ignore environments that don't allow changing default tensor type
+        pass
+
+# Consolidated imports (no duplicates)
 import arxiv
 import duckdb
-import streamlit as st
 import chromadb
 import time
 from datetime import datetime
@@ -41,6 +29,7 @@ import faiss
 import hashlib
 import textwrap
 from chromadb.utils import embedding_functions
+
 
 # ----------------------
 # Configuration
@@ -73,11 +62,16 @@ def check_memory(threshold=85):
     return True
 
 def smart_cleanup():
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    elif torch.backends.mps.is_available():
-        torch.mps.empty_cache()
+    try:
+        if torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif torch is not None and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    except Exception:
+        # ignore cleanup failures
+        pass
     gc.collect()
+
 
 # ----------------------
 # Lazy Loading Components
@@ -98,15 +92,21 @@ def get_reranker():
 # Distributed Vector Store
 # ----------------------
 @st.cache_resource
+@st.cache_resource
 def get_vector_store():
     client = chromadb.PersistentClient(path="./nextgen_rag_db")
     embedding_model = get_embedding_model()
-    embedding_dimension = embedding_model.get_sentence_embedding_dimension()
+    # If embedder not ready, fallback to a sensible default dimension (avoid crash)
+    if embedding_model is None:
+        st.warning("Embedding model unavailable; creating collections with default embedding dimension 1536.")
+        embedding_dimension = 1536
+    else:
+        embedding_dimension = embedding_model.get_sentence_embedding_dimension()
     
     for domain in DOMAIN_SHARDS:
         try:
             collection = client.get_collection(f"knowledge_{domain}")
-        except:
+        except Exception:
             collection = client.create_collection(
                 name=f"knowledge_{domain}",
                 metadata={
@@ -118,7 +118,6 @@ def get_vector_store():
         
     return client, SHARD_COLLECTIONS
 
-client, shard_collections = get_vector_store()
 
 # ----------------------
 # File Management
@@ -234,19 +233,26 @@ def ingest_data(data, data_type="pdf", source_name=None):
     try:
         shard = data_type
         texts = [chunk["text"] for chunk in data]
-        metadatas = [{"source": source_name, "type": data_type} for _ in data]
-        
-        # Add additional metadata
+        texts = [chunk["text"] for chunk in data]
+        # create a stable doc_id for this source (file name)
+        doc_id = hashlib.md5(str(source_name).encode('utf-8')).hexdigest()[:12]
+        metadatas = []
+        ids = []
         for i, chunk in enumerate(data):
+            md = {"source": source_name, "type": data_type, "doc_id": doc_id}
             if "page" in chunk:
-                metadatas[i]["page"] = chunk["page"]
+                md["page"] = chunk["page"]
             if "row" in chunk:
-                metadatas[i]["row"] = chunk["row"]
-        
+                md["row"] = chunk["row"]
+            # create a chunk-level id
+            chunk_id = f"{doc_id}_{i}"
+            md["chunk_id"] = chunk_id
+            metadatas.append(md)
+            ids.append(f"{data_type}_{chunk_id}")
+
         # Embed and store
         model = get_embedding_model()
         embeddings = model.encode(texts).tolist()
-        ids = [f"{data_type}_{uuid.uuid4().hex[:8]}" for _ in texts]
         
         shard_collections[shard].upsert(
             ids=ids,
@@ -258,55 +264,90 @@ def ingest_data(data, data_type="pdf", source_name=None):
     except Exception as e:
         st.error(f"Ingestion error: {str(e)}")
         return False
-
+        
 def hybrid_retrieval(question, max_results=5, source_filter=None):
-    """Simplified retrieval process"""
+    """Simplified retrieval with robust post-filtering by source and dedup"""
     start_time = time.time()
-    
-    # Build filter if source is specified
-    where_filter = None
-    if source_filter:
-        where_filter = {"source": source_filter}
-    
-    # Get embedding model
     model = get_embedding_model()
+    if model is None:
+        return {"documents": [], "metadatas": [], "domains": []}
+
+    # Create embedding for query
     query_embedding = model.encode(question).tolist()
-    
-    # Search across all shards
+
     all_results = []
     for domain, collection in shard_collections.items():
         try:
+            # query without relying on 'where' being supported exactly the same everywhere
             results = collection.query(
                 query_embeddings=[query_embedding],
-                n_results=max_results*2,
+                n_results=max_results * 5,
                 include=["metadatas", "documents"],
-                where=where_filter
+                where={}  # fetch broadly; we'll filter below for safety
             )
-            all_results.extend(zip(
-                results["documents"][0],
-                results["metadatas"][0],
-                [domain] * len(results["documents"][0])
-            ))
-        except:
+
+            docs = results.get("documents", [[]])[0]
+            metas = results.get("metadatas", [[]])[0]
+            for doc, meta in zip(docs, metas):
+                # Make sure meta is a dict
+                if not isinstance(meta, dict):
+                    meta = {}
+                # Only keep items that match the requested source (if provided)
+                if source_filter and meta.get("source") != source_filter:
+                    continue
+
+                # Build a stable identifier to avoid duplicates
+                # prefer explicitly stored fields, else fallback to hash of text+source
+                doc_source = meta.get("source", "")
+                doc_page = str(meta.get("page", ""))
+                doc_row = str(meta.get("row", ""))
+                short_hash = hashlib.md5((doc_source + doc_page + doc_row + doc[:150]).encode('utf-8')).hexdigest()[:10]
+                identifier = f"{doc_source}::{short_hash}"
+
+                all_results.append((identifier, doc, meta, domain))
+        except Exception as e:
+            # skip failures for a shard
             continue
-    
-    # Remove duplicates
+
+    # Deduplicate preserving order and pick highest-length (simple proxy for relevance)
     seen = set()
     unique_results = []
-    for doc, meta, domain in all_results:
-        identifier = meta.get("id", doc[:100])
-        if identifier not in seen:
-            seen.add(identifier)
-            unique_results.append((doc, meta, domain))
-    
-    # Sort by relevance (simple approach)
-    unique_results.sort(key=lambda x: len(x[0]), reverse=True)
-    
+    for identifier, doc, meta, domain in all_results:
+        if identifier in seen:
+            continue
+        seen.add(identifier)
+        unique_results.append((doc, meta, domain))
+
+    # If user asked for source_filter but we got zero results, fall back to cross-shard search (optional)
+    if source_filter and len(unique_results) == 0:
+        # try again without source restriction (best-effort)
+        for domain, collection in shard_collections.items():
+            try:
+                results = collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=max_results,
+                    include=["metadatas", "documents"],
+                    where={}
+                )
+                docs = results.get("documents", [[]])[0]
+                metas = results.get("metadatas", [[]])[0]
+                for doc, meta in zip(docs, metas):
+                    unique_results.append((doc, meta, domain))
+            except:
+                pass
+
+    # Sort results - simple heuristic: longer matched document first (you can swap for score)
+    unique_results.sort(key=lambda x: len(x[0]) if x[0] else 0, reverse=True)
+
+    # Trim to requested max_results
+    unique_results = unique_results[:max_results]
+
     return {
-        "documents": [doc for doc, _, _ in unique_results[:max_results]],
-        "metadatas": [meta for _, meta, _ in unique_results[:max_results]],
-        "domains": [domain for _, _, domain in unique_results[:max_results]]
+        "documents": [doc for doc, _, _ in unique_results],
+        "metadatas": [meta for _, meta, _ in unique_results],
+        "domains": [domain for _, _, domain in unique_results]
     }
+
 
 def chat_with_document(query, source_name, chat_history):
     """Optimized chat with document"""
