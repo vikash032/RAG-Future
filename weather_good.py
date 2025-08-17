@@ -679,7 +679,7 @@ with st.sidebar:
         if st.button("Preload Offline Embeddings"):
             with st.spinner("Loading embeddings for offline use..."):
                 load_offline_embeddings()
-                st.success(f"Loaded {sum(len(v['documents']) for v in OFFLINE_EMBEDDINGS.values()} embeddings")
+                st.success(f"Loaded {sum(len(v['documents']) for v in OFFLINE_EMBEDDINGS.values())} embeddings")
     
     st.subheader("Data Sources")
     latitude = st.number_input("Latitude", value=40.71)
