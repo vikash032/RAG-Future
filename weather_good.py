@@ -3,54 +3,107 @@ __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
-import streamlit as st
-import os
-import requests
-import uuid
-import gc
-import numpy as np
-import pandas as pd
-
-# Lazy / guarded import for torch so deployment doesn't crash if pip install is still running
-try:
-    import torch
-except Exception as e:
-    torch = None
-    st.warning("PyTorch not available yet. Model features will be disabled until torch is installed.")
-    # optionally: st.error(str(e))
-
+# ----------------------
+# Consolidated imports
+# ----------------------
 import os
 import io
 import base64
-import requests
+import time
 import uuid
-import torch
 import gc
+import re
+import hashlib
+import textwrap
+from datetime import datetime
+from tempfile import NamedTemporaryFile
+
+import streamlit as st
+import requests
 import numpy as np
 import pandas as pd
-import arxiv
-import duckdb
-import streamlit as st
-import spacy
-import chromadb
-import time
-from datetime import datetime
-from unstructured.partition.pdf import partition_pdf
-from tempfile import NamedTemporaryFile
-from FlagEmbedding import FlagReranker
-from sentence_transformers import SentenceTransformer
-from setfit import SetFitModel, SetFitTrainer
-from datasets import Dataset
 import psutil
-import re
-import schedule
-import threading
-import faiss
-from PIL import Image
-from transformers import CLIPProcessor, CLIPModel
-import matplotlib.pyplot as plt
-import hashlib
 
+# optional heavy libs (guarded use)
+try:
+    import torch as _torch
+    torch = _torch
+except Exception:
+    torch = None
+    st.warning("PyTorch not available yet. Model features will be disabled until torch is installed.")
+
+# Only set default tensor type if torch is available
+if torch is not None:
+    try:
+        torch.set_default_tensor_type(torch.FloatTensor)
+    except Exception:
+        pass
+
+# heavier libs used later
+try:
+    import arxiv
+except Exception:
+    arxiv = None
+
+try:
+    import duckdb
+except Exception:
+    duckdb = None
+
+try:
+    import chromadb
+except Exception:
+    chromadb = None
+
+try:
+    from unstructured.partition.pdf import partition_pdf
+except Exception:
+    partition_pdf = None
+
+try:
+    from FlagEmbedding import FlagReranker
+except Exception:
+    FlagReranker = None
+
+try:
+    from sentence_transformers import SentenceTransformer
+except Exception:
+    SentenceTransformer = None
+
+# optional / additional features
+try:
+    from setfit import SetFitModel, SetFitTrainer
+    from datasets import Dataset
+except Exception:
+    SetFitModel = None
+    SetFitTrainer = None
+    Dataset = None
+
+try:
+    import spacy
+except Exception:
+    spacy = None
+
+try:
+    import faiss
+except Exception:
+    faiss = None
+
+try:
+    from PIL import Image
+except Exception:
+    Image = None
+
+try:
+    from transformers import CLIPProcessor, CLIPModel
+except Exception:
+    CLIPProcessor = None
+    CLIPModel = None
+
+try:
+    import matplotlib.pyplot as plt
+except Exception:
+    plt = None
 
 # ----------------------
 # Configuration
@@ -61,14 +114,11 @@ st.set_page_config(
     layout="wide"
 )
 
-# Set default tensor type
-torch.set_default_tensor_type(torch.FloatTensor)
-
 # ----------------------
 # Constants & Globals
 # ----------------------
 DOMAIN_SHARDS = ["pdf", "csv"]
-SHARD_COLLECTIONS = {}
+SHARD_COLLECTIONS = {}         # global canonical collections dict
 CURRENT_DEPLOYMENT_MODE = "online"
 OFFLINE_EMBEDDINGS = {}
 
@@ -89,56 +139,98 @@ def smart_cleanup():
         elif torch is not None and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             torch.mps.empty_cache()
     except Exception:
-        # ignore cleanup failures
         pass
     gc.collect()
 
-
 # ----------------------
-# Lazy Loading Components
+# Lazy Loading Components (guarded)
 # ----------------------
 @st.cache_resource
 def get_embedding_model():
+    """Return SentenceTransformer model or None if unavailable"""
     if not check_memory():
         return None
-    return SentenceTransformer('BAAI/bge-base-en-v1.5')
+    if SentenceTransformer is None:
+        st.warning("SentenceTransformer not installed.")
+        return None
+    try:
+        return SentenceTransformer('BAAI/bge-base-en-v1.5')
+    except Exception as e:
+        st.warning(f"Embedding model load failed: {e}")
+        return None
 
 @st.cache_resource
 def get_reranker():
     if not check_memory():
         return None
-    return FlagReranker('BAAI/bge-reranker-base', use_fp16=False)
+    if FlagReranker is None:
+        return None
+    try:
+        return FlagReranker('BAAI/bge-reranker-base', use_fp16=False)
+    except Exception:
+        return None
 
 # ----------------------
-# Distributed Vector Store
+# Distributed Vector Store (robust)
 # ----------------------
-@st.cache_resource
 @st.cache_resource
 def get_vector_store():
-    client = chromadb.PersistentClient(path="./nextgen_rag_db")
-    embedding_model = get_embedding_model()
-    # If embedder not ready, fallback to a sensible default dimension (avoid crash)
-    if embedding_model is None:
-        st.warning("Embedding model unavailable; creating collections with default embedding dimension 1536.")
-        embedding_dimension = 1536
-    else:
-        embedding_dimension = embedding_model.get_sentence_embedding_dimension()
-    
-    for domain in DOMAIN_SHARDS:
-        try:
-            collection = client.get_collection(f"knowledge_{domain}")
-        except Exception:
-            collection = client.create_collection(
-                name=f"knowledge_{domain}",
-                metadata={
-                    "hnsw:space": "cosine",
-                    "embedding_dimension": str(embedding_dimension)
-                }
-            )
-        SHARD_COLLECTIONS[domain] = collection
-        
-    return client, SHARD_COLLECTIONS
+    """
+    Initialize chroma persistent client and collections.
+    Returns (client, collections_dict). On failure returns (None, {}).
+    """
+    try:
+        if chromadb is None:
+            st.warning("chromadb not available; vector store disabled.")
+            return None, {}
 
+        client = chromadb.PersistentClient(path="./nextgen_rag_db")
+
+        embedding_model = get_embedding_model()
+        if embedding_model is None:
+            st.warning("Embedding model unavailable; using default embedding dimension 1536.")
+            embedding_dimension = 1536
+        else:
+            try:
+                embedding_dimension = embedding_model.get_sentence_embedding_dimension()
+            except Exception:
+                embedding_dimension = 1536
+
+        local_collections = {}
+        for domain in DOMAIN_SHARDS:
+            try:
+                collection = client.get_collection(f"knowledge_{domain}")
+            except Exception:
+                collection = client.create_collection(
+                    name=f"knowledge_{domain}",
+                    metadata={
+                        "hnsw:space": "cosine",
+                        "embedding_dimension": str(embedding_dimension)
+                    }
+                )
+            local_collections[domain] = collection
+
+        return client, local_collections
+
+    except Exception as e:
+        st.error(f"Vector store initialization failed: {e}")
+        return None, {}
+
+# Initialize vector store safely
+try:
+    client, collections = get_vector_store()
+    if isinstance(collections, dict):
+        SHARD_COLLECTIONS.update(collections)
+    else:
+        client = None
+        SHARD_COLLECTIONS = {}
+except Exception as e:
+    st.error(f"Failed to initialize vector store: {e}")
+    client = None
+    SHARD_COLLECTIONS = {}
+
+# alias for runtime use (avoid NameError)
+shard_collections = SHARD_COLLECTIONS
 
 # ----------------------
 # File Management
@@ -146,8 +238,15 @@ def get_vector_store():
 def delete_documents_by_source(source_name):
     """Delete all documents from a specific source"""
     try:
+        if not shard_collections:
+            st.warning("Vector store unavailable; nothing to delete.")
+            return False
         for domain, collection in shard_collections.items():
-            collection.delete(where={"source": source_name})
+            try:
+                collection.delete(where={"source": source_name})
+            except Exception:
+                # ignore per-shard deletion errors
+                continue
         return True
     except Exception as e:
         st.error(f"Error deleting documents: {str(e)}")
@@ -172,7 +271,7 @@ def get_weather_data(latitude=40.71, longitude=-74.01):
 - Precipitation: 0.0mm
 - Wind: 15.2km/h"""
         }
-    except Exception as e:
+    except Exception:
         return {
             "text": "Weather data currently unavailable",
             "time": datetime.now().isoformat(),
@@ -181,6 +280,7 @@ def get_weather_data(latitude=40.71, longitude=-74.01):
 
 def fetch_arxiv_papers(query, max_results=3):
     try:
+        # placeholder / stub
         return [{
             "title": "Large Language Models for Scientific Research",
             "authors": ["John Doe", "Jane Smith"],
@@ -189,7 +289,7 @@ def fetch_arxiv_papers(query, max_results=3):
             "pdf_url": "https://arxiv.org/pdf/1234.56789",
             "entry_id": "1234.56789"
         }]
-    except:
+    except Exception:
         return []
 
 def fetch_clinical_trials(condition="cancer", max_results=3):
@@ -200,29 +300,35 @@ def fetch_clinical_trials(condition="cancer", max_results=3):
             "status": "Recruiting",
             "text": "Clinical Trial: Study of New Cancer Treatment"
         }]
-    except:
+    except Exception:
         return []
 
 def process_pdf(uploaded_file):
-    """Simple text extraction from PDF"""
+    """Simple text extraction from PDF (local import to be safe)"""
     try:
+        import PyPDF2
         # Create temp file
         with NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
             tmp.write(uploaded_file.read())
             tmp_path = tmp.name
-        
+
         # Read PDF as text
         with open(tmp_path, 'rb') as f:
             pdf_reader = PyPDF2.PdfReader(f)
             text = ""
             for page in pdf_reader.pages:
-                text += page.extract_text() + "\n\n"
-        
-        os.unlink(tmp_path)
-        
-        # Split into chunks
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n\n"
+
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+        # Split into chunks (simple wrap)
         chunks = textwrap.wrap(text, width=1000)
-        return [{"text": chunk, "source": uploaded_file.name, "page": i+1} 
+        return [{"text": chunk, "source": uploaded_file.name, "page": i+1}
                 for i, chunk in enumerate(chunks)]
     except Exception as e:
         st.error(f"PDF processing error: {str(e)}")
@@ -234,7 +340,6 @@ def process_csv(uploaded_file):
         df = pd.read_csv(uploaded_file)
         chunks = []
         for i, row in df.iterrows():
-            # Create natural language representation
             row_text = ", ".join([f"{col}: {val}" for col, val in row.items()])
             chunks.append({
                 "text": f"Row {i+1}: {row_text}",
@@ -247,14 +352,14 @@ def process_csv(uploaded_file):
         return []
 
 def ingest_data(data, data_type="pdf", source_name=None):
-    """Simplified ingestion process"""
+    """Simplified ingestion process with robust metadata and model checks"""
     if not data:
         return False
-        
+
     try:
         shard = data_type
         texts = [chunk["text"] for chunk in data]
-        texts = [chunk["text"] for chunk in data]
+
         # create a stable doc_id for this source (file name)
         doc_id = hashlib.md5(str(source_name).encode('utf-8')).hexdigest()[:12]
         metadatas = []
@@ -273,8 +378,16 @@ def ingest_data(data, data_type="pdf", source_name=None):
 
         # Embed and store
         model = get_embedding_model()
+        if model is None:
+            st.error("Embedding model not available. Ingestion aborted.")
+            return False
+
         embeddings = model.encode(texts).tolist()
-        
+
+        if not shard_collections or shard not in shard_collections:
+            st.error("Vector store not initialized. Ingestion aborted.")
+            return False
+
         shard_collections[shard].upsert(
             ids=ids,
             embeddings=embeddings,
@@ -285,10 +398,12 @@ def ingest_data(data, data_type="pdf", source_name=None):
     except Exception as e:
         st.error(f"Ingestion error: {str(e)}")
         return False
-        
+
 def hybrid_retrieval(question, max_results=5, source_filter=None):
     """Simplified retrieval with robust post-filtering by source and dedup"""
-    start_time = time.time()
+    if not shard_collections:
+        return {"documents": [], "metadatas": [], "domains": []}
+
     model = get_embedding_model()
     if model is None:
         return {"documents": [], "metadatas": [], "domains": []}
@@ -299,7 +414,6 @@ def hybrid_retrieval(question, max_results=5, source_filter=None):
     all_results = []
     for domain, collection in shard_collections.items():
         try:
-            # query without relying on 'where' being supported exactly the same everywhere
             results = collection.query(
                 query_embeddings=[query_embedding],
                 n_results=max_results * 5,
@@ -307,30 +421,26 @@ def hybrid_retrieval(question, max_results=5, source_filter=None):
                 where={}  # fetch broadly; we'll filter below for safety
             )
 
-            docs = results.get("documents", [[]])[0]
-            metas = results.get("metadatas", [[]])[0]
+            docs = results.get("documents", [[]])[0] if isinstance(results.get("documents"), list) else []
+            metas = results.get("metadatas", [[]])[0] if isinstance(results.get("metadatas"), list) else []
             for doc, meta in zip(docs, metas):
-                # Make sure meta is a dict
                 if not isinstance(meta, dict):
                     meta = {}
-                # Only keep items that match the requested source (if provided)
                 if source_filter and meta.get("source") != source_filter:
                     continue
 
-                # Build a stable identifier to avoid duplicates
-                # prefer explicitly stored fields, else fallback to hash of text+source
+                # Build stable identifier to dedup
                 doc_source = meta.get("source", "")
                 doc_page = str(meta.get("page", ""))
                 doc_row = str(meta.get("row", ""))
-                short_hash = hashlib.md5((doc_source + doc_page + doc_row + doc[:150]).encode('utf-8')).hexdigest()[:10]
+                short_hash = hashlib.md5((doc_source + doc_page + doc_row + (doc[:150] if doc else "")).encode('utf-8')).hexdigest()[:10]
                 identifier = f"{doc_source}::{short_hash}"
 
                 all_results.append((identifier, doc, meta, domain))
-        except Exception as e:
-            # skip failures for a shard
+        except Exception:
             continue
 
-    # Deduplicate preserving order and pick highest-length (simple proxy for relevance)
+    # Deduplicate preserving order
     seen = set()
     unique_results = []
     for identifier, doc, meta, domain in all_results:
@@ -339,9 +449,8 @@ def hybrid_retrieval(question, max_results=5, source_filter=None):
         seen.add(identifier)
         unique_results.append((doc, meta, domain))
 
-    # If user asked for source_filter but we got zero results, fall back to cross-shard search (optional)
+    # If source filter requested but nothing returned, optionally fall back to cross-shard
     if source_filter and len(unique_results) == 0:
-        # try again without source restriction (best-effort)
         for domain, collection in shard_collections.items():
             try:
                 results = collection.query(
@@ -350,17 +459,14 @@ def hybrid_retrieval(question, max_results=5, source_filter=None):
                     include=["metadatas", "documents"],
                     where={}
                 )
-                docs = results.get("documents", [[]])[0]
-                metas = results.get("metadatas", [[]])[0]
+                docs = results.get("documents", [[]])[0] if isinstance(results.get("documents"), list) else []
+                metas = results.get("metadatas", [[]])[0] if isinstance(results.get("metadatas"), list) else []
                 for doc, meta in zip(docs, metas):
                     unique_results.append((doc, meta, domain))
-            except:
+            except Exception:
                 pass
 
-    # Sort results - simple heuristic: longer matched document first (you can swap for score)
     unique_results.sort(key=lambda x: len(x[0]) if x[0] else 0, reverse=True)
-
-    # Trim to requested max_results
     unique_results = unique_results[:max_results]
 
     return {
@@ -369,18 +475,16 @@ def hybrid_retrieval(question, max_results=5, source_filter=None):
         "domains": [domain for _, _, domain in unique_results]
     }
 
-
 def chat_with_document(query, source_name, chat_history):
     """Optimized chat with document"""
     with st.spinner("Searching document..."):
         results = hybrid_retrieval(query, max_results=1, source_filter=source_name)
-    
+
     if results["documents"]:
         response = results["documents"][0]
     else:
         response = "I couldn't find relevant information in this document."
-    
-    # Add to chat history
+
     chat_history.append({"user": query, "assistant": response})
     return chat_history
 
@@ -411,16 +515,19 @@ with st.sidebar:
     latitude = st.number_input("Latitude", value=40.71)
     longitude = st.number_input("Longitude", value=-74.01)
     refresh_rate = st.slider("Weather Refresh (min)", 1, 60, 15)
-    
+
     st.subheader("System Info")
-    total_docs = sum(c.count() for c in shard_collections.values())
+    try:
+        total_docs = sum(c.count() for c in shard_collections.values()) if shard_collections else 0
+    except Exception:
+        total_docs = 0
     st.write(f"Documents in DB: {total_docs}")
     st.write(f"Memory: {psutil.virtual_memory().percent}% used")
     st.write(f"Last job run: {st.session_state.last_job_run}")
 
 # Tabs
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "🌤️ Live Weather", "📄 Document Upload", "📚 Arxiv Research", 
+    "🌤️ Live Weather", "📄 Document Upload", "📚 Arxiv Research",
     "🏥 Clinical Trials", "🔍 Knowledge Query", "💬 Document Chat"
 ])
 
@@ -429,13 +536,13 @@ with tab1:
     st.header("Real-time Weather Data")
     if st.button("Update Weather", key="weather_refresh"):
         st.cache_data.clear()
-    
+
     @st.cache_data(ttl=refresh_rate * 60)
     def update_weather():
         return get_weather_data(latitude, longitude)
-    
+
     weather_data = update_weather()
-    
+
     if weather_data:
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Temperature", f"{weather_data.get('temperature', 'N/A')}°C")
@@ -448,64 +555,56 @@ with tab1:
 with tab2:
     st.header("Document Processing")
     file_type = st.radio("File Type", ["PDF", "CSV"], horizontal=True, key="file_type_radio")
-    
+
     if file_type == "PDF":
         uploaded_file = st.file_uploader("Upload PDF", type="pdf", key="pdf_uploader")
         replace_existing = st.checkbox("Replace existing documents with same name", True)
-        
+
         if uploaded_file:
-            # Calculate file hash to detect changes
             file_hash = hashlib.md5(uploaded_file.getvalue()).hexdigest()
-            
-            # Check if file has changed
+
             if replace_existing or file_hash != st.session_state.file_hashes.get(uploaded_file.name):
-                # Delete existing documents with same source name
                 if replace_existing:
                     delete_documents_by_source(uploaded_file.name)
-                
+
                 with st.spinner(f"Processing {uploaded_file.name}..."):
                     try:
-                        # Import PDF library only when needed
-                        import PyPDF2
                         chunks = process_pdf(uploaded_file)
                         if chunks:
                             if ingest_data(chunks, "pdf", uploaded_file.name):
                                 st.success(f"✅ Processed {len(chunks)} text chunks")
                                 st.session_state.file_hashes[uploaded_file.name] = file_hash
-                                
+
                                 with st.expander("View extracted content"):
                                     for i, chunk in enumerate(chunks[:3]):
                                         st.caption(f"Chunk {i+1} (Page {chunk.get('page', 1)})")
                                         st.text(chunk["text"][:300] + "...")
                     except Exception as e:
                         st.error(f"Error processing PDF: {str(e)}")
-    
+
     else:  # CSV processing
         uploaded_file = st.file_uploader("Upload CSV", type="csv", key="csv_uploader")
         replace_existing = st.checkbox("Replace existing documents with same name", True)
-        
+
         if uploaded_file:
-            # Calculate file hash to detect changes
             file_hash = hashlib.md5(uploaded_file.getvalue()).hexdigest()
-            
-            # Check if file has changed
+
             if replace_existing or file_hash != st.session_state.file_hashes.get(uploaded_file.name):
-                # Delete existing documents with same source name
                 if replace_existing:
                     delete_documents_by_source(uploaded_file.name)
-                
+
                 with st.spinner(f"Processing {uploaded_file.name}..."):
                     chunks = process_csv(uploaded_file)
                     if chunks:
                         if ingest_data(chunks, "csv", uploaded_file.name):
                             st.success(f"✅ Processed {len(chunks)} CSV rows")
                             st.session_state.file_hashes[uploaded_file.name] = file_hash
-                            
+
                             with st.expander("View sample data"):
                                 try:
                                     df = pd.read_csv(uploaded_file)
                                     st.dataframe(df.head(3))
-                                except:
+                                except Exception:
                                     st.warning("Could not display CSV preview")
 
 # Tab 3: Arxiv Research
@@ -514,11 +613,11 @@ with tab3:
     arxiv_query = st.text_input("Search Query", "large language models")
     if st.button("Fetch Papers"):
         st.session_state.arxiv_papers = fetch_arxiv_papers(arxiv_query, 3)
-    
+
     if st.session_state.arxiv_papers:
         paper = st.selectbox("Select Paper", [p["title"] for p in st.session_state.arxiv_papers])
         selected_paper = next(p for p in st.session_state.arxiv_papers if p["title"] == paper)
-        
+
         st.write(f"**Authors:** {', '.join(selected_paper['authors'])}")
         st.write(f"**Published:** {selected_paper['published']}")
         st.write(selected_paper["summary"])
@@ -529,7 +628,7 @@ with tab4:
     condition = st.text_input("Medical Condition", "cancer")
     if st.button("Fetch Trials"):
         st.session_state.clinical_trials = fetch_clinical_trials(condition, 3)
-    
+
     if st.session_state.clinical_trials:
         for trial in st.session_state.clinical_trials:
             with st.expander(trial["title"]):
@@ -540,76 +639,74 @@ with tab4:
 with tab5:
     st.header("Knowledge Query")
     question = st.text_input("Ask a question", "What's the current weather in New York?")
-    
+
     if st.button("Search"):
         with st.spinner("Searching..."):
             results = hybrid_retrieval(question, max_results=3)
-            
+
             if results["documents"]:
                 for i, (doc, meta, domain) in enumerate(zip(
-                    results["documents"], 
-                    results["metadatas"], 
+                    results["documents"],
+                    results["metadatas"],
                     results["domains"]
                 )):
-                    with st.expander(f"Result {i+1} ({domain})", expanded=i==0):
+                    with st.expander(f"Result {i+1} ({domain})", expanded=i == 0):
                         st.write(doc)
-                        
+
                         meta_info = []
-                        if meta.get("source"): meta_info.append(f"Source: {meta['source']}")
-                        if meta_info: st.caption(" | ".join(meta_info))
+                        if isinstance(meta, dict) and meta.get("source"):
+                            meta_info.append(f"Source: {meta['source']}")
+                        if meta_info:
+                            st.caption(" | ".join(meta_info))
             else:
                 st.warning("No relevant results found")
 
 # Tab 6: Document Chat
 with tab6:
     st.header("💬 Chat with Your Documents")
-    
+
     # Get all ingested sources
     sources = set()
     for domain in DOMAIN_SHARDS:
-        if domain in shard_collections:
-            collection = shard_collections[domain]
-            try:
-                items = collection.get(include=["metadatas"])
-                for meta in items["metadatas"]:
-                    if meta and "source" in meta:
-                        sources.add(meta["source"])
-            except:
-                pass
-    
+        collection = shard_collections.get(domain) if isinstance(shard_collections, dict) else None
+        if not collection:
+            continue
+        try:
+            items = collection.get(include=["metadatas"])
+            metas = items.get("metadatas", []) if isinstance(items, dict) else []
+            for meta in metas:
+                if meta and isinstance(meta, dict) and "source" in meta:
+                    sources.add(meta["source"])
+        except Exception:
+            pass
+
     if sources:
         selected_source = st.selectbox("Select a document to chat with", list(sources))
-        
-        # Initialize chat history for this source
+
         if selected_source not in st.session_state.chat_histories:
             st.session_state.chat_histories[selected_source] = []
-        
+
         chat_history = st.session_state.chat_histories[selected_source]
-        
-        # Display chat history
+
         for message in chat_history:
             with st.chat_message("user"):
                 st.markdown(message["user"])
             with st.chat_message("assistant"):
                 st.markdown(message["assistant"])
-        
-        # User input
+
         user_query = st.chat_input(f"Ask about {selected_source}...")
-        
+
         if user_query:
-            # Add user message to chat
             with st.chat_message("user"):
                 st.markdown(user_query)
-            
-            # Get and display assistant response
+
             with st.chat_message("assistant"):
                 try:
                     chat_history = chat_with_document(user_query, selected_source, chat_history)
                     st.markdown(chat_history[-1]["assistant"])
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
-            
-            # Update session state
+
             st.session_state.chat_histories[selected_source] = chat_history
     else:
         st.info("Upload and process documents first to enable chat")
@@ -619,9 +716,12 @@ st.sidebar.divider()
 st.sidebar.subheader("Implementation Status")
 st.sidebar.markdown("""
 - ✅ **PDF & CSV Support**: Robust document processing
-- ✅ **Vector Storage**: Efficient content retrieval
+- ✅ **Vector Storage**: Efficient content retrieval (if chromadb installed)
 - ✅ **Document Chat**: Real-time Q&A with files
 - ✅ **Performance**: Optimized for speed
 - ✅ **Reliability**: Error-resistant design
 """)
-st.sidebar.progress(100, text="Production Ready")
+try:
+    st.sidebar.progress(100, text="Production Ready")
+except Exception:
+    pass
