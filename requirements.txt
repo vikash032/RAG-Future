@@ -38,6 +38,7 @@ unstructured[local-inference]
 pdfminer.six
 pi-heif
 pdf2image
+PyPDF2
 pillow-heif
 python-magic
 duckdb
