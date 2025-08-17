@@ -1,8 +1,11 @@
-# Core numeric & ML libraries
-numpy==1.2.6
+# Core numeric & ML libraries - CORRECTED VERSION
+numpy==2.2.6
 torch==2.2.2
 torchvision==0.17.2
 torchaudio==2.2.2
+
+# SQLite compatibility fix for Chroma
+pysqlite3-binary>=3.35.0
 
 # Embeddings & Transformers (unpinned to latest ≥4.44.2)
 transformers>=4.44.2
@@ -20,6 +23,7 @@ spacy
 
 # Application & utility libraries
 streamlit==1.48.1
+chromadb
 requests
 pandas
 regex
@@ -29,15 +33,12 @@ langchain
 unstructured[local-inference]
 pdfminer.six
 pi-heif
-pdf2image 
-pillow-heif  
-python-magic  
-duckdb  
-dlt  
-opencv-python<4.12  
-chromadb
-pysqlite3-binary
-
+pdf2image
+pillow-heif
+python-magic
+duckdb
+dlt
+opencv-python<4.12
 
 # Custom embedding package (FlagEmbedding)
 git+https://github.com/FlagOpen/FlagEmbedding.git
