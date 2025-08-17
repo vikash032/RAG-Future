@@ -1,13 +1,13 @@
-# Core numeric & ML libraries - CORRECTED VERSION
+# Core numeric & ML libraries
 numpy==2.2.6
 torch==2.2.2
 torchvision==0.17.2
 torchaudio==2.2.2
 
-# SQLite compatibility fix for Chroma
-pysqlite3-binary>=3.35.0
+# SQLite fix for Chroma - CORRECT VERSION!
+pysqlite3-binary
 
-# Embeddings & Transformers (unpinned to latest ≥4.44.2)
+# Embeddings & Transformers
 transformers>=4.44.2
 sentence-transformers==2.2.2
 setfit==0.7.0
@@ -40,5 +40,5 @@ duckdb
 dlt
 opencv-python<4.12
 
-# Custom embedding package (FlagEmbedding)
+# Custom embedding package
 git+https://github.com/FlagOpen/FlagEmbedding.git
