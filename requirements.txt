@@ -4,8 +4,11 @@ torch==2.2.2
 torchvision==0.17.2
 torchaudio==2.2.2
 
-# SQLite fix for Chroma - CORRECT VERSION!
+# SQLite fix for Chroma
 pysqlite3-binary
+
+# OpenCV - HEADLESS VERSION FOR STREAMLIT CLOUD
+opencv-python-headless
 
 # Embeddings & Transformers
 transformers>=4.44.2
@@ -38,7 +41,6 @@ pillow-heif
 python-magic
 duckdb
 dlt
-opencv-python<4.12
 
 # Custom embedding package
 git+https://github.com/FlagOpen/FlagEmbedding.git
