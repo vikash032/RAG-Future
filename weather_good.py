@@ -1,34 +1,55 @@
+# Fix SQLite for Chroma - YE LINES SABSE UPAR HONI CHAHIYE
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+
+import streamlit as st
+import os
+import requests
+import uuid
+import gc
+import numpy as np
+import pandas as pd
+
 # Lazy / guarded import for torch so deployment doesn't crash if pip install is still running
 try:
-    import torch as _torch
-    torch = _torch
-except Exception:
+    import torch
+except Exception as e:
     torch = None
     st.warning("PyTorch not available yet. Model features will be disabled until torch is installed.")
+    # optionally: st.error(str(e))
 
-# Only set default tensor type if torch is available
-if torch is not None:
-    try:
-        torch.set_default_tensor_type(torch.FloatTensor)
-    except Exception:
-        # ignore environments that don't allow changing default tensor type
-        pass
-
-# Consolidated imports (no duplicates)
+import os
+import io
+import base64
+import requests
+import uuid
+import torch
+import gc
+import numpy as np
+import pandas as pd
 import arxiv
 import duckdb
+import streamlit as st
+import spacy
 import chromadb
 import time
 from datetime import datetime
+from unstructured.partition.pdf import partition_pdf
 from tempfile import NamedTemporaryFile
 from FlagEmbedding import FlagReranker
 from sentence_transformers import SentenceTransformer
+from setfit import SetFitModel, SetFitTrainer
+from datasets import Dataset
 import psutil
 import re
+import schedule
+import threading
 import faiss
+from PIL import Image
+from transformers import CLIPProcessor, CLIPModel
+import matplotlib.pyplot as plt
 import hashlib
-import textwrap
-from chromadb.utils import embedding_functions
 
 
 # ----------------------
