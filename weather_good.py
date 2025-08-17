@@ -399,37 +399,58 @@ def ingest_data(data, data_type="pdf", source_name=None):
         st.error(f"Ingestion error: {str(e)}")
         return False
 
-def hybrid_retrieval(question, max_results=5, source_filter=None):
-    """Simplified retrieval with robust post-filtering by source and dedup"""
+def hybrid_retrieval(question, max_results=5, source_filter=None, debug=False):
+    """Robust retrieval — uses Chroma 'where' to force exact source filter when requested.
+
+    If debug=True, prints short diagnostics to the Streamlit app.
+    """
     if not shard_collections:
+        if debug: st.info("No shard_collections available (vector store not initialized).")
         return {"documents": [], "metadatas": [], "domains": []}
 
     model = get_embedding_model()
     if model is None:
+        if debug: st.info("Embedding model not available.")
         return {"documents": [], "metadatas": [], "domains": []}
 
     # Create embedding for query
-    query_embedding = model.encode(question).tolist()
+    try:
+        query_embedding = model.encode(question).tolist()
+    except Exception as e:
+        if debug: st.error(f"Encoding error: {e}")
+        return {"documents": [], "metadatas": [], "domains": []}
 
     all_results = []
+
+    # If a source_filter is provided, attempt to use the collection.query 'where' param directly.
     for domain, collection in shard_collections.items():
         try:
-            results = collection.query(
-                query_embeddings=[query_embedding],
-                n_results=max_results * 5,
-                include=["metadatas", "documents"],
-                where={}  # fetch broadly; we'll filter below for safety
-            )
+            if source_filter:
+                # Attempt exact-match filtering on metadata 'source'
+                results = collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=max_results * 5,
+                    include=["metadatas", "documents"],
+                    where={"source": source_filter}
+                )
+            else:
+                results = collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=max_results * 5,
+                    include=["metadatas", "documents"],
+                    where={}  # broad fetch
+                )
 
             docs = results.get("documents", [[]])[0] if isinstance(results.get("documents"), list) else []
             metas = results.get("metadatas", [[]])[0] if isinstance(results.get("metadatas"), list) else []
+
             for doc, meta in zip(docs, metas):
                 if not isinstance(meta, dict):
                     meta = {}
+                # If source_filter was not applied at backend, still enforce it here
                 if source_filter and meta.get("source") != source_filter:
                     continue
 
-                # Build stable identifier to dedup
                 doc_source = meta.get("source", "")
                 doc_page = str(meta.get("page", ""))
                 doc_row = str(meta.get("row", ""))
@@ -437,7 +458,11 @@ def hybrid_retrieval(question, max_results=5, source_filter=None):
                 identifier = f"{doc_source}::{short_hash}"
 
                 all_results.append((identifier, doc, meta, domain))
-        except Exception:
+
+        except Exception as e:
+            if debug:
+                st.warning(f"Shard '{domain}' query failed: {e}")
+            # skip the shard on failure
             continue
 
     # Deduplicate preserving order
@@ -449,8 +474,9 @@ def hybrid_retrieval(question, max_results=5, source_filter=None):
         seen.add(identifier)
         unique_results.append((doc, meta, domain))
 
-    # If source filter requested but nothing returned, optionally fall back to cross-shard
+    # If user asked for a specific source and we found none, try a cross-shard best-effort (no source restriction)
     if source_filter and len(unique_results) == 0:
+        if debug: st.info("No results after exact source-filtered queries; falling back to cross-shard search.")
         for domain, collection in shard_collections.items():
             try:
                 results = collection.query(
@@ -466,6 +492,7 @@ def hybrid_retrieval(question, max_results=5, source_filter=None):
             except Exception:
                 pass
 
+    # Sort by length heuristic (longer first)
     unique_results.sort(key=lambda x: len(x[0]) if x[0] else 0, reverse=True)
     unique_results = unique_results[:max_results]
 
@@ -474,6 +501,7 @@ def hybrid_retrieval(question, max_results=5, source_filter=None):
         "metadatas": [meta for _, meta, _ in unique_results],
         "domains": [domain for _, _, domain in unique_results]
     }
+
 
 def chat_with_document(query, source_name, chat_history):
     """Optimized chat with document"""
@@ -662,10 +690,11 @@ with tab5:
                 st.warning("No relevant results found")
 
 # Tab 6: Document Chat
+# Tab 6: Document Chat
 with tab6:
     st.header("💬 Chat with Your Documents")
 
-    # Get all ingested sources
+    # Build list of distinct sources from metadata safely
     sources = set()
     for domain in DOMAIN_SHARDS:
         collection = shard_collections.get(domain) if isinstance(shard_collections, dict) else None
@@ -678,22 +707,64 @@ with tab6:
                 if meta and isinstance(meta, dict) and "source" in meta:
                     sources.add(meta["source"])
         except Exception:
-            pass
+            # ignore shards that can't return metadata
+            continue
 
-    if sources:
-        selected_source = st.selectbox("Select a document to chat with", list(sources))
+    if not sources:
+        st.info("No ingested sources found. Upload and process a PDF/CSV first.")
+    else:
+        selected_source = st.selectbox("Select a document to chat with", sorted(list(sources)))
 
+        # Show a short preview of up to 5 chunks from the chosen source so you can verify stored content
+        with st.expander("Preview stored chunks for selected document", expanded=True):
+            preview_shown = 0
+            for domain in DOMAIN_SHARDS:
+                collection = shard_collections.get(domain) if isinstance(shard_collections, dict) else None
+                if not collection:
+                    continue
+                try:
+                    # We attempt a lightweight exact metadata fetch by asking for documents/metadatas and then filtering
+                    items = collection.get(include=["documents", "metadatas"])
+                    docs = items.get("documents", []) if isinstance(items, dict) else []
+                    metas = items.get("metadatas", []) if isinstance(items, dict) else []
+                    # items come as lists per collection; handle both shapes
+                    if isinstance(docs, list) and len(docs) > 0 and isinstance(docs[0], list):
+                        docs = docs[0]
+                    if isinstance(metas, list) and len(metas) > 0 and isinstance(metas[0], list):
+                        metas = metas[0]
+
+                    for doc, meta in zip(docs, metas):
+                        if not isinstance(meta, dict):
+                            continue
+                        if meta.get("source") != selected_source:
+                            continue
+                        preview_shown += 1
+                        st.markdown(f"**Chunk {preview_shown} (domain={domain}) — metadata:** `{meta}`")
+                        st.write(doc[:800] + ("..." if len(doc) > 800 else ""))
+                        if preview_shown >= 5:
+                            break
+                    if preview_shown >= 5:
+                        break
+                except Exception:
+                    continue
+
+            if preview_shown == 0:
+                st.warning("No chunks found for this source in the vector store. This means ingestion might have failed or stored a different 'source' value.")
+
+        # Initialize chat history for the source
         if selected_source not in st.session_state.chat_histories:
             st.session_state.chat_histories[selected_source] = []
 
         chat_history = st.session_state.chat_histories[selected_source]
 
+        # Display existing chat history
         for message in chat_history:
             with st.chat_message("user"):
                 st.markdown(message["user"])
             with st.chat_message("assistant"):
                 st.markdown(message["assistant"])
 
+        # Input
         user_query = st.chat_input(f"Ask about {selected_source}...")
 
         if user_query:
@@ -701,15 +772,20 @@ with tab6:
                 st.markdown(user_query)
 
             with st.chat_message("assistant"):
-                try:
-                    chat_history = chat_with_document(user_query, selected_source, chat_history)
-                    st.markdown(chat_history[-1]["assistant"])
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                # Use debug=True to get internal diagnostics if needed
+                results = hybrid_retrieval(user_query, max_results=1, source_filter=selected_source, debug=True)
+                if results["documents"]:
+                    response = results["documents"][0]
+                else:
+                    response = "I couldn't find relevant information in this document."
 
+                # append and display
+                chat_history.append({"user": user_query, "assistant": response})
+                st.markdown(response)
+
+            # save history back to session
             st.session_state.chat_histories[selected_source] = chat_history
-    else:
-        st.info("Upload and process documents first to enable chat")
+
 
 # System Status
 st.sidebar.divider()
