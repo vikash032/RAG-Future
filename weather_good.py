@@ -19,7 +19,6 @@ except Exception as e:
     st.warning("PyTorch not available yet. Model features will be disabled until torch is installed.")
     # optionally: st.error(str(e))
 
-# nextgen_rag_system.py
 import os
 import io
 import base64
@@ -49,7 +48,6 @@ import threading
 import faiss
 from PIL import Image
 from transformers import CLIPProcessor, CLIPModel
-from sklearn.metrics import ndcg_score
 import matplotlib.pyplot as plt
 
 # ----------------------
@@ -67,12 +65,11 @@ torch.set_default_tensor_type(torch.FloatTensor)
 # ----------------------
 # Constants & Globals
 # ----------------------
-DOMAIN_SHARDS = ["arxiv", "clinical", "pdf", "image", "table", "code"]
-EVALUATION_METRICS = ["precision@1", "precision@3", "recall", "ndcg"]
+DOMAIN_SHARDS = ["arxiv", "clinical", "pdf", "image", "table", "code", "csv"]
 SHARD_COLLECTIONS = {}
 CURRENT_DEPLOYMENT_MODE = "online"
 OFFLINE_EMBEDDINGS = {}
-UMLS_API_KEY = "demo-key"  # Replace with your real API key in production
+UMLS_API_KEY = "demo-key"
 WIKIDATA_ENDPOINT = "https://www.wikidata.org/w/api.php"
 
 # ----------------------
@@ -96,13 +93,13 @@ def smart_cleanup():
 # Lazy Loading Components
 # ----------------------
 @st.cache_resource
-def get_embedding_model(quantized=False):
+def get_embedding_model():
     if not check_memory():
         return None
     return SentenceTransformer('BAAI/bge-base-en-v1.5')
 
 @st.cache_resource
-def get_reranker(quantized=False):
+def get_reranker():
     if not check_memory():
         return None
     return FlagReranker('BAAI/bge-reranker-base', use_fp16=False)
@@ -110,11 +107,9 @@ def get_reranker(quantized=False):
 @st.cache_resource
 def get_nlp():
     try:
-        # Try loading SciSpacy for medical entity extraction
         return spacy.load("en_core_sci_sm")
     except:
         try:
-            # Fallback to standard model
             return spacy.load("en_core_web_sm")
         except:
             st.warning("SpaCy model not found. Some features disabled.")
@@ -133,15 +128,19 @@ def get_clip_processor():
 # ----------------------
 @st.cache_resource
 def get_vector_store():
-    # Initialize sharded collections
     client = chromadb.PersistentClient(path="./nextgen_rag_db")
     
     for domain in DOMAIN_SHARDS:
         try:
             collection = client.get_collection(f"knowledge_{domain}")
         except:
-            model = get_embedding_model()
-            embedding_dimension = 768 if domain == "image" else model.get_sentence_embedding_dimension()
+            # Get appropriate embedding dimension
+            if domain == "image":
+                embedding_dimension = 512
+            else:
+                model = get_embedding_model()
+                embedding_dimension = model.get_sentence_embedding_dimension()
+                
             collection = client.create_collection(
                 name=f"knowledge_{domain}",
                 metadata={
@@ -160,9 +159,7 @@ client, shard_collections = get_vector_store()
 # Knowledge Graph Functions
 # ----------------------
 def query_umls_api(entity):
-    """Query UMLS API for entity information"""
     try:
-        # Mock implementation - replace with actual API call
         return {
             "entity": entity,
             "definition": f"Definition of {entity} from UMLS",
@@ -173,9 +170,7 @@ def query_umls_api(entity):
         return {"entity": entity, "error": "UMLS API unavailable"}
 
 def query_wikidata(entity):
-    """Query Wikidata for entity information"""
     try:
-        # Mock implementation - replace with actual API call
         return [{
             "id": "Q12345",
             "label": f"{entity} (scientific concept)",
@@ -185,14 +180,11 @@ def query_wikidata(entity):
         return []
 
 def enrich_entities(entities):
-    """Enrich entities with external knowledge sources"""
     enriched = []
     for entity in entities:
-        # Prioritize medical entities for UMLS
         if "label" in entity and entity["label"] in ["DISEASE", "CHEMICAL", "ANATOMY"]:
             enriched.append(query_umls_api(entity["text"]))
         else:
-            # Use Wikidata for general entities
             enriched.append({
                 "entity": entity["text"],
                 "source": "Wikidata",
@@ -204,7 +196,6 @@ def enrich_entities(entities):
 # Multi-modal Functions
 # ----------------------
 def embed_image(image):
-    """Embed image using CLIP model"""
     processor = get_clip_processor()
     model = get_clip_model()
     
@@ -214,12 +205,11 @@ def embed_image(image):
     return features.cpu().numpy().flatten().tolist()
 
 def extract_code_snippets(text):
-    """Extract code snippets from text"""
     code_patterns = [
-        r"```(.*?)```",  # Markdown code blocks
-        r"``(.*?)``",    # Inline code
-        r"<code>(.*?)</code>",  # HTML code
-        r"^\s{4,}(.*?)$"  # Indented code
+        r"```(.*?)```",
+        r"``(.*?)``",
+        r"<code>(.*?)</code>",
+        r"^\s{4,}(.*?)$"
     ]
     
     snippets = []
@@ -230,21 +220,18 @@ def extract_code_snippets(text):
     return snippets
 
 # ----------------------
-# Monitoring & Evaluation
+# Monitoring & Logging
 # ----------------------
-def log_retrieval_metrics(query, results, method, latency, k=5):
-    """Log retrieval performance metrics"""
+def log_retrieval_metrics(query, results, method, latency):
     timestamp = datetime.now().isoformat()
     metrics = {
         "timestamp": timestamp,
         "query": query,
         "method": method,
         "latency": latency,
-        "results_count": len(results),
-        "vector_db_size": sum(c.count() for c in shard_collections.values())
+        "results_count": len(results) if results else 0
     }
     
-    # Store in DuckDB
     conn = duckdb.connect(database=':memory:')
     conn.execute("""
         CREATE TABLE IF NOT EXISTS retrieval_metrics (
@@ -252,13 +239,12 @@ def log_retrieval_metrics(query, results, method, latency, k=5):
             query TEXT,
             method TEXT,
             latency FLOAT,
-            results_count INTEGER,
-            vector_db_size INTEGER
+            results_count INTEGER
         )
     """)
     conn.execute("""
-        INSERT INTO retrieval_metrics VALUES (?, ?, ?, ?, ?, ?)
-    """, [timestamp, query, method, latency, metrics["results_count"], metrics["vector_db_size"]])
+        INSERT INTO retrieval_metrics VALUES (?, ?, ?, ?, ?)
+    """, [timestamp, query, method, latency, metrics["results_count"]])
     
     return metrics
 
@@ -266,19 +252,16 @@ def log_retrieval_metrics(query, results, method, latency, k=5):
 # Automated Jobs
 # ----------------------
 def nightly_ingestion_job():
-    """Automated nightly data ingestion (mock implementation)"""
     st.session_state.last_job_run = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return True
 
 def start_scheduler():
-    """Start background scheduler for automated jobs"""
     schedule.every().day.at("02:00").do(nightly_ingestion_job)
     
     while True:
         schedule.run_pending()
         time.sleep(60)
 
-# Start scheduler in background thread
 if not hasattr(st.session_state, 'scheduler_started'):
     threading.Thread(target=start_scheduler, daemon=True).start()
     st.session_state.scheduler_started = True
@@ -287,7 +270,6 @@ if not hasattr(st.session_state, 'scheduler_started'):
 # Edge & Offline Support
 # ----------------------
 def load_offline_embeddings(subset_size=100):
-    """Preload a subset of embeddings for offline use"""
     for domain, collection in shard_collections.items():
         if collection.count() > 0:
             sample_size = min(subset_size, collection.count())
@@ -297,30 +279,27 @@ def load_offline_embeddings(subset_size=100):
                 "embeddings": sample["embeddings"]
             }
 
-def offline_retrieval(query, domain="all", max_results=5):
-    """Retrieval using preloaded embeddings for offline mode"""
+def offline_retrieval(query, max_results=5):
     model = get_embedding_model()
     query_embedding = model.encode([query])[0]
     
     results = []
-    domains = DOMAIN_SHARDS if domain == "all" else [domain]
     
-    for domain in domains:
-        if domain in OFFLINE_EMBEDDINGS:
+    for domain in DOMAIN_SHARDS:
+        if domain in OFFLINE_EMBEDDINGS and domain != "image":
             embeddings = OFFLINE_EMBEDDINGS[domain]["embeddings"]
             documents = OFFLINE_EMBEDDINGS[domain]["documents"]
             
-            # Create FAISS index
-            dimension = len(embeddings[0])
-            index = faiss.IndexFlatIP(dimension)
-            index.add(np.array(embeddings))
-            
-            # Search
-            D, I = index.search(np.array([query_embedding]), max_results)
-            
-            for i in I[0]:
-                if i < len(documents):
-                    results.append(documents[i])
+            if embeddings and documents:
+                dimension = len(embeddings[0])
+                index = faiss.IndexFlatIP(dimension)
+                index.add(np.array(embeddings))
+                
+                D, I = index.search(np.array([query_embedding]), max_results)
+                
+                for i in I[0]:
+                    if i < len(documents):
+                        results.append(documents[i])
     
     return results[:max_results]
 
@@ -328,9 +307,7 @@ def offline_retrieval(query, domain="all", max_results=5):
 # Core Functions
 # ----------------------
 def get_weather_data(latitude=40.71, longitude=-74.01):
-    """Fetch real-time weather data"""
     try:
-        # Mock weather data to avoid API dependencies
         current_time = datetime.now().isoformat()
         return {
             "temperature": 22.5,
@@ -353,9 +330,7 @@ def get_weather_data(latitude=40.71, longitude=-74.01):
         }
 
 def fetch_arxiv_papers(query, max_results=3):
-    """Fetch papers from Arxiv API"""
     try:
-        # Mock implementation to avoid API issues
         return [{
             "title": "Large Language Models for Scientific Research",
             "authors": ["John Doe", "Jane Smith"],
@@ -368,9 +343,7 @@ def fetch_arxiv_papers(query, max_results=3):
         return []
 
 def fetch_clinical_trials(condition="cancer", max_results=3):
-    """Fetch clinical trials"""
     try:
-        # Mock implementation to avoid API issues
         return [{
             "id": "NCT123456",
             "title": "Study of New Cancer Treatment",
@@ -381,9 +354,7 @@ def fetch_clinical_trials(condition="cancer", max_results=3):
         return []
 
 def process_pdf(uploaded_file, source_type="general"):
-    """Process PDF with multi-modal extraction"""
     try:
-        # For demo purposes, we'll use sample text instead of actual PDF parsing
         sample_text = """
         ABSTRACT: This study examines cancer treatment options. 
         BACKGROUND: Cancer is a leading cause of death worldwide.
@@ -399,15 +370,16 @@ def process_pdf(uploaded_file, source_type="general"):
         ```
         """
         
-        # Simulate extracted elements
         chunks = [{
             "text": "ABSTRACT: This study examines cancer treatment options.",
             "section": "ABSTRACT",
-            "type": "text"
+            "type": "text",
+            "source": uploaded_file.name
         }, {
             "text": "BACKGROUND: Cancer is a leading cause of death worldwide.",
             "section": "BACKGROUND",
-            "type": "text"
+            "type": "text",
+            "source": uploaded_file.name
         }]
         
         tables = [{
@@ -417,12 +389,12 @@ def process_pdf(uploaded_file, source_type="general"):
                 "Success": [100, 200]
             }),
             "html": "<table><tr><th>Group</th><th>Patients</th><th>Success</th></tr></table>",
-            "type": "table"
+            "type": "table",
+            "source": uploaded_file.name
         }]
         
-        # Create sample image
         img = Image.new('RGB', (100, 100), color=(73, 109, 137))
-        images = [{"image": img, "type": "image"}]
+        images = [{"image": img, "type": "image", "source": uploaded_file.name}]
         
         code_snippets = [
             "def calculate_treatment_effectiveness(patients):\n    return sum(p.success for p in patients) / len(patients)"
@@ -443,8 +415,24 @@ def process_pdf(uploaded_file, source_type="general"):
             "code_snippets": []
         }
 
+def process_csv(uploaded_file):
+    try:
+        df = pd.read_csv(uploaded_file)
+        chunks = []
+        for i, row in df.iterrows():
+            chunk = {
+                "text": str(row.to_dict()),
+                "type": "csv",
+                "source": uploaded_file.name,
+                "row": i+1
+            }
+            chunks.append(chunk)
+        return chunks
+    except Exception as e:
+        st.error(f"CSV processing error: {str(e)}")
+        return []
+
 def generate_qa_pairs(text):
-    """Generate Q&A pairs using pattern matching"""
     patterns = [
         (r'([A-Z][A-Za-z\s]+):\s*([^\n\.]+)', 
          lambda m: (f"What is {m.group(1).lower()}?", m.group(2))),
@@ -469,7 +457,6 @@ def generate_qa_pairs(text):
     return qa_pairs
 
 def extract_entities(text):
-    """Extract entities using SciSpacy and enrich with external knowledge"""
     nlp = get_nlp()
     if nlp is None:
         return []
@@ -477,61 +464,62 @@ def extract_entities(text):
     doc = nlp(text)
     entities = [{"text": ent.text, "label": ent.label_} for ent in doc.ents]
     
-    # Enrich with external knowledge
     if st.session_state.enable_knowledge_graph:
         return enrich_entities(entities)
     return entities
 
 def ingest_data(data, data_type="weather", metadata=None):
-    """Embed and store data in vector DB shards"""
     if not data:
         return False
         
     try:
-        # Determine shard based on data type
         if data_type == "weather":
-            shard = "pdf"  # Use 'pdf' shard for general content
+            shard = "pdf"
             texts = [data["text"]]
             metadatas = [{"type": "weather", "time": data["time"], "location": data["location"]}]
+            ids = [f"weather_{uuid.uuid4().hex[:8]}"]
+            
         elif data_type == "pdf":
             shard = "pdf"
             texts = [chunk["text"] for chunk in data["text_chunks"]]
             metadatas = []
+            ids = []
             for chunk in data["text_chunks"]:
                 meta = {
                     "type": "text",
-                    "source": "uploaded_file",
+                    "source": chunk.get("source", "unknown"),
                     "page": 1
                 }
                 if "section" in chunk:
                     meta["section"] = chunk["section"]
                 metadatas.append(meta)
+                ids.append(f"text_{uuid.uuid4().hex[:8]}")
             
-            # Simulate ingesting tables
-            if data["tables"]:
-                for table in data["tables"]:
-                    table_text = table["table"].to_string()
-                    shard_collections["table"].upsert(
-                        documents=[table_text],
-                        metadatas=[{"type": "table", "source": "uploaded_file"}]
-                    )
+            # Ingest tables
+            for table in data["tables"]:
+                table_text = table["table"].to_string()
+                shard_collections["table"].upsert(
+                    ids=[f"table_{uuid.uuid4().hex[:8]}"],
+                    documents=[table_text],
+                    metadatas=[{"type": "table", "source": table["source"]}]
+                )
             
-            # Simulate ingesting images
-            if data["images"]:
-                for img in data["images"]:
-                    image_embedding = embed_image(img["image"])
-                    shard_collections["image"].upsert(
-                        embeddings=[image_embedding],
-                        metadatas=[{"type": "image", "source": "uploaded_file"}]
-                    )
+            # Ingest images
+            for img in data["images"]:
+                image_embedding = embed_image(img["image"])
+                shard_collections["image"].upsert(
+                    ids=[f"img_{uuid.uuid4().hex[:8]}"],
+                    embeddings=[image_embedding],
+                    metadatas=[{"type": "image", "source": img["source"]}]
+                )
             
-            # Simulate ingesting code snippets
-            if data["code_snippets"]:
-                for snippet in data["code_snippets"]:
-                    shard_collections["code"].upsert(
-                        documents=[snippet],
-                        metadatas=[{"type": "code", "source": "uploaded_file"}]
-                    )
+            # Ingest code snippets
+            for snippet in data["code_snippets"]:
+                shard_collections["code"].upsert(
+                    ids=[f"code_{uuid.uuid4().hex[:8]}"],
+                    documents=[snippet],
+                    metadatas=[{"type": "code", "source": "uploaded_file"}]
+                )
             
         elif data_type == "arxiv":
             shard = "arxiv"
@@ -542,6 +530,8 @@ def ingest_data(data, data_type="weather", metadata=None):
                 "authors": ", ".join(data["authors"]),
                 "published": data["published"]
             }]
+            ids = [f"arxiv_{uuid.uuid4().hex[:8]}"]
+            
         elif data_type == "clinical":
             shard = "clinical"
             texts = [data["text"]]
@@ -550,19 +540,31 @@ def ingest_data(data, data_type="weather", metadata=None):
                 "status": data["status"],
                 "id": data["id"]
             }]
+            ids = [f"clinical_{uuid.uuid4().hex[:8]}"]
+            
         elif data_type == "qa":
-            shard = "pdf"  # Use 'pdf' shard for general content
+            shard = "pdf"
             texts = [f"Q: {qa['question']}\nA: {qa['answer']}" for qa in data]
             metadatas = [{
                 "type": "qa_pair",
                 "context": qa.get("context", "")
             } for qa in data]
+            ids = [f"qa_{uuid.uuid4().hex[:8]}" for _ in data]
+            
+        elif data_type == "csv":
+            shard = "csv"
+            texts = [chunk["text"] for chunk in data]
+            metadatas = [{
+                "type": "csv",
+                "source": chunk.get("source", "unknown"),
+                "row": chunk.get("row", 0)
+            } for chunk in data]
+            ids = [f"csv_{uuid.uuid4().hex[:8]}" for _ in data]
         
-        # Embed and store in appropriate shard
+        # Embed and store
         if texts:
             model = get_embedding_model()
             embeddings = model.encode(texts).tolist()
-            ids = [f"{data_type}_{uuid.uuid4().hex[:8]}" for _ in texts]
             
             shard_collections[shard].upsert(
                 ids=ids,
@@ -575,43 +577,55 @@ def ingest_data(data, data_type="weather", metadata=None):
         st.error(f"Ingestion error: {str(e)}")
         return False
 
-def hybrid_retrieval(question, max_results=5, method="hybrid"):
-    """Hybrid search with multiple retrieval methods"""
+def hybrid_retrieval(question, max_results=5, method="hybrid", source_filter=None):
     start_time = time.time()
     
-    # Semantic search (all shards)
+    # Build filter if source is specified
+    where_filter = None
+    if source_filter:
+        where_filter = {"source": source_filter}
+    
+    # Semantic search
     if method in ["semantic", "hybrid"]:
         model = get_embedding_model()
         query_embedding = model.encode(question).tolist()
         semantic_results = []
         for domain, collection in shard_collections.items():
-            if domain != "image":  # Images require different handling
-                results = collection.query(
-                    query_embeddings=[query_embedding],
-                    n_results=max_results,
-                    include=["metadatas", "documents", "distances"]
-                )
-                semantic_results.extend(zip(
-                    results["documents"][0],
-                    results["metadatas"][0],
-                    [domain] * len(results["documents"][0])
-                ))
+            if domain != "image":  # Skip image shard for text search
+                try:
+                    results = collection.query(
+                        query_embeddings=[query_embedding],
+                        n_results=max_results*3,
+                        include=["metadatas", "documents", "distances"],
+                        where=where_filter
+                    )
+                    semantic_results.extend(zip(
+                        results["documents"][0],
+                        results["metadatas"][0],
+                        [domain] * len(results["documents"][0])
+                    ))
+                except Exception as e:
+                    st.error(f"Error querying {domain} shard: {str(e)}")
     
-    # Lexical search (if enabled)
+    # Lexical search
     lexical_results = []
     if method in ["lexical", "hybrid"] and st.session_state.lexical_search:
         for domain, collection in shard_collections.items():
-            if domain != "image":  # Images require different handling
-                results = collection.query(
-                    query_texts=[question],
-                    n_results=max_results,
-                    include=["metadatas", "documents"]
-                )
-                lexical_results.extend(zip(
-                    results["documents"][0],
-                    results["metadatas"][0],
-                    [domain] * len(results["documents"][0])
-                ))
+            if domain != "image":  # Skip image shard for text search
+                try:
+                    results = collection.query(
+                        query_texts=[question],
+                        n_results=max_results,
+                        include=["metadatas", "documents"],
+                        where=where_filter
+                    )
+                    lexical_results.extend(zip(
+                        results["documents"][0],
+                        results["metadatas"][0],
+                        [domain] * len(results["documents"][0])
+                    ))
+                except:
+                    pass
     
     # Combine results
     all_results = semantic_results + lexical_results
@@ -652,11 +666,24 @@ def hybrid_retrieval(question, max_results=5, method="hybrid"):
         "domains": domains
     }
 
+def chat_with_document(query, source_name, chat_history):
+    """Chat with a specific document"""
+    results = hybrid_retrieval(query, max_results=3, source_filter=source_name)
+    
+    if results["documents"]:
+        response = results["documents"][0]
+    else:
+        response = "I couldn't find relevant information in this document."
+    
+    # Add to chat history
+    chat_history.append({"user": query, "assistant": response})
+    return chat_history
+
 # ----------------------
 # Streamlit UI
 # ----------------------
 st.title("🚀 Next-Gen RAG System")
-st.caption("Hybrid Retrieval | Knowledge Graph | Real-time Data | Multi-modal")
+st.caption("Hybrid Retrieval | Knowledge Graph | Real-time Data | Multi-modal | Document Chat")
 
 # Initialize session states
 if 'arxiv_papers' not in st.session_state:
@@ -669,6 +696,8 @@ if 'enable_knowledge_graph' not in st.session_state:
     st.session_state.enable_knowledge_graph = True
 if 'last_job_run' not in st.session_state:
     st.session_state.last_job_run = "Never"
+if 'chat_histories' not in st.session_state:
+    st.session_state.chat_histories = {}
 
 # Sidebar Configuration
 with st.sidebar:
@@ -679,7 +708,7 @@ with st.sidebar:
         if st.button("Preload Offline Embeddings"):
             with st.spinner("Loading embeddings for offline use..."):
                 load_offline_embeddings()
-                st.success(f"Loaded {sum(len(v['documents']) for v in OFFLINE_EMBEDDINGS.values())} embeddings")
+                st.success(f"Loaded {sum(len(v['documents']) for v in OFFLINE_EMBEDDINGS.values()} embeddings")
     
     st.subheader("Data Sources")
     latitude = st.number_input("Latitude", value=40.71)
@@ -703,9 +732,9 @@ with st.sidebar:
     st.write(f"Last job run: {st.session_state.last_job_run}")
 
 # Tabs
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "🌤️ Live Weather", "📄 PDF Ingestion", "📚 Arxiv Research", 
-    "🏥 Clinical Trials", "❓ Q&A Generator", "🔍 Knowledge Query"
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "🌤️ Live Weather", "📄 Document Upload", "📚 Arxiv Research", 
+    "🏥 Clinical Trials", "❓ Q&A Generator", "🔍 Knowledge Query", "💬 Document Chat"
 ])
 
 # Tab 1: Live Weather
@@ -729,45 +758,62 @@ with tab1:
         col4.metric("Wind Speed", f"{weather_data.get('windspeed', 'N/A')} km/h")
         st.code(weather_data["text"])
 
-# Tab 2: PDF Ingestion
+# Tab 2: Document Upload
 with tab2:
     st.header("Document Processing")
-    uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
-    source_type = st.radio("Content Type", ["General", "Medical"], horizontal=True)
+    file_type = st.radio("File Type", ["PDF", "CSV"], horizontal=True)
     
-    if uploaded_files:
-        for uploaded_file in uploaded_files:
-            with st.spinner(f"Processing {uploaded_file.name}..."):
-                result = process_pdf(uploaded_file, source_type.lower())
-                if result["text_chunks"]:
-                    if ingest_data(result, "pdf"):
-                        st.success(f"✅ Processed {len(result['text_chunks'])} text chunks")
-                        
-                        with st.expander("View extracted content"):
-                            # Show text chunks
-                            st.subheader("Text Chunks")
-                            for i, chunk in enumerate(result["text_chunks"][:3]):
-                                st.caption(f"Chunk {i+1}")
-                                st.text(chunk["text"][:300] + "...")
+    if file_type == "PDF":
+        uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
+        source_type = st.radio("Content Type", ["General", "Medical"], horizontal=True)
+        
+        if uploaded_files:
+            for uploaded_file in uploaded_files:
+                with st.spinner(f"Processing {uploaded_file.name}..."):
+                    result = process_pdf(uploaded_file, source_type.lower())
+                    if result["text_chunks"]:
+                        if ingest_data(result, "pdf"):
+                            st.success(f"✅ Processed {len(result['text_chunks'])} text chunks")
                             
-                            # Show tables
-                            if result["tables"]:
-                                st.subheader("Tables")
-                                for i, table in enumerate(result["tables"][:2]):
-                                    st.dataframe(table["table"].head(3))
+                            with st.expander("View extracted content"):
+                                st.subheader("Text Chunks")
+                                for i, chunk in enumerate(result["text_chunks"][:3]):
+                                    st.caption(f"Chunk {i+1}")
+                                    st.text(chunk["text"][:300] + "...")
+                                
+                                if result["tables"]:
+                                    st.subheader("Tables")
+                                    for i, table in enumerate(result["tables"][:2]):
+                                        st.dataframe(table["table"].head(3))
+                                
+                                if result["images"]:
+                                    st.subheader("Images")
+                                    cols = st.columns(2)
+                                    for i, img in enumerate(result["images"][:2]):
+                                        cols[i % 2].image(img["image"], caption=f"Image {i+1}")
+                                
+                                if result["code_snippets"]:
+                                    st.subheader("Code Snippets")
+                                    for i, snippet in enumerate(result["code_snippets"][:3]):
+                                        st.code(snippet, language="python")
+    
+    else:  # CSV processing
+        uploaded_files = st.file_uploader("Upload CSV Files", type="csv", accept_multiple_files=True)
+        
+        if uploaded_files:
+            for uploaded_file in uploaded_files:
+                with st.spinner(f"Processing {uploaded_file.name}..."):
+                    chunks = process_csv(uploaded_file)
+                    if chunks:
+                        if ingest_data(chunks, "csv"):
+                            st.success(f"✅ Processed {len(chunks)} CSV rows")
                             
-                            # Show images
-                            if result["images"]:
-                                st.subheader("Images")
-                                cols = st.columns(2)
-                                for i, img in enumerate(result["images"][:2]):
-                                    cols[i % 2].image(img["image"], caption=f"Image {i+1}")
-                            
-                            # Show code snippets
-                            if result["code_snippets"]:
-                                st.subheader("Code Snippets")
-                                for i, snippet in enumerate(result["code_snippets"][:3]):
-                                    st.code(snippet, language="python")
+                            with st.expander("View sample data"):
+                                try:
+                                    df = pd.read_csv(uploaded_file)
+                                    st.dataframe(df.head(3))
+                                except:
+                                    st.warning("Could not display CSV preview")
 
 # Tab 3: Arxiv Research
 with tab3:
@@ -861,7 +907,6 @@ with tab6:
                         results["domains"]
                     )):
                         with st.expander(f"Result {i+1} ({domain})", expanded=i==0):
-                            # Knowledge Graph Enhancement
                             if st.session_state.enable_knowledge_graph:
                                 entities = extract_entities(doc)
                                 if entities:
@@ -880,7 +925,6 @@ with tab6:
                             
                             st.write(doc)
                             
-                            # Metadata display
                             meta_info = []
                             if meta.get("source"): meta_info.append(f"Source: {meta['source']}")
                             if meta.get("title"): meta_info.append(f"Title: {meta['title']}")
@@ -889,14 +933,66 @@ with tab6:
                 else:
                     st.warning("No relevant results found")
 
+# Tab 7: Document Chat
+with tab7:
+    st.header("💬 Chat with Your Documents")
+    
+    # Get all ingested sources
+    sources = set()
+    for domain in ["pdf", "csv"]:
+        if domain in shard_collections:
+            collection = shard_collections[domain]
+            try:
+                items = collection.get(include=["metadatas"])
+                for meta in items["metadatas"]:
+                    if meta and "source" in meta:
+                        sources.add(meta["source"])
+            except:
+                pass
+    
+    if sources:
+        selected_source = st.selectbox("Select a document to chat with", list(sources))
+        
+        # Initialize chat history for this source
+        if selected_source not in st.session_state.chat_histories:
+            st.session_state.chat_histories[selected_source] = []
+        
+        chat_history = st.session_state.chat_histories[selected_source]
+        
+        # Display chat history
+        for message in chat_history:
+            with st.chat_message("user"):
+                st.markdown(message["user"])
+            with st.chat_message("assistant"):
+                st.markdown(message["assistant"])
+        
+        # User input
+        user_query = st.chat_input(f"Ask about {selected_source}...")
+        
+        if user_query:
+            # Add user message to chat
+            with st.chat_message("user"):
+                st.markdown(user_query)
+            
+            # Get and display assistant response
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    chat_history = chat_with_document(user_query, selected_source, chat_history)
+                    st.markdown(chat_history[-1]["assistant"])
+            
+            # Update session state
+            st.session_state.chat_histories[selected_source] = chat_history
+    else:
+        st.info("Upload and process documents first to enable chat")
+
 # System Status
 st.sidebar.divider()
 st.sidebar.subheader("Implementation Status")
 st.sidebar.markdown("""
 - ✅ **Advanced KG Integration**: SciSpacy + UMLS/Wikidata
-- ✅ **Multi-modal Support**: Images, tables, code
+- ✅ **Multi-modal Support**: PDFs, CSV, images, tables, code
 - ✅ **Scalable Vector Store**: Domain sharding
 - ✅ **MLOps & Monitoring**: Logging + nightly jobs
-- ✅ **Edge Support**: Offline mode
+- ✅ **Document Chat**: Interactive Q&A with uploaded files
 """)
 st.sidebar.progress(100, text="Production Ready")
