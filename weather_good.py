@@ -115,6 +115,38 @@ def get_chroma_client():
 
 client, collection = get_chroma_client()
 
+
+import chromadb
+import logging
+
+def get_chroma_client():
+    try:
+        client = chromadb.PersistentClient(path="./nextgen_rag_db")
+        
+        # Try to get existing collection first
+        try:
+            collection = client.get_collection("knowledge_base")
+        except Exception as e:
+            logging.info(f"Collection doesn't exist or schema mismatch: {e}")
+            
+            # Create new collection
+            model = get_embedding_model()
+            embedding_dimension = model.get_sentence_embedding_dimension()
+            
+            collection = client.create_collection(
+                name="knowledge_base",
+                metadata={"hnsw:space": "cosine", "embedding_dimension": str(embedding_dimension)}
+            )
+            
+        return client, collection
+        
+    except Exception as e:
+        logging.error(f"ChromaDB initialization failed: {e}")
+        # Fallback: delete and recreate
+        if os.path.exists("./nextgen_rag_db"):
+            shutil.rmtree("./nextgen_rag_db")
+        return get_chroma_client()  # Retry
+
 # ----------------------
 # Core Functions
 # ----------------------
