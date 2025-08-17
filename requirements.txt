@@ -20,9 +20,9 @@ faiss-cpu==1.7.4
 onnxruntime==1.22.1
 
 # spaCy / RAG preprocessing (NumPy-1.x compatible)
-thinc==8.2.10
-blis==0.7.10
-spacy==3.5.4
+thinc==8.1.1
+blis==0.7.9
+spacy==3.4.4
 
 # Application & utility libraries
 streamlit==1.48.1
