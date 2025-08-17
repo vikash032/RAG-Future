@@ -124,32 +124,36 @@ def get_clip_processor():
     return CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 # ----------------------
-# Distributed Vector Store
+# Distributed Vector Store (FIXED)
 # ----------------------
 @st.cache_resource
 def get_vector_store():
     client = chromadb.PersistentClient(path="./nextgen_rag_db")
     
+    # Get embedding dimensions
+    text_embedding_dim = get_embedding_model().get_sentence_embedding_dimension()
+    image_embedding_dim = 512  # CLIP dimension
+    
     for domain in DOMAIN_SHARDS:
         try:
             collection = client.get_collection(f"knowledge_{domain}")
+            SHARD_COLLECTIONS[domain] = collection
         except:
-            # Get appropriate embedding dimension
+            # Set appropriate dimension for each shard type
             if domain == "image":
-                embedding_dimension = 512
+                embedding_dim = image_embedding_dim
             else:
-                model = get_embedding_model()
-                embedding_dimension = model.get_sentence_embedding_dimension()
+                embedding_dim = text_embedding_dim
                 
             collection = client.create_collection(
                 name=f"knowledge_{domain}",
                 metadata={
                     "hnsw:space": "cosine",
-                    "embedding_dimension": str(embedding_dimension),
+                    "embedding_dimension": str(embedding_dim),
                     "shard_domain": domain
                 }
             )
-        SHARD_COLLECTIONS[domain] = collection
+            SHARD_COLLECTIONS[domain] = collection
         
     return client, SHARD_COLLECTIONS
 
@@ -304,7 +308,7 @@ def offline_retrieval(query, max_results=5):
     return results[:max_results]
 
 # ----------------------
-# Core Functions
+# Core Functions (FIXED)
 # ----------------------
 def get_weather_data(latitude=40.71, longitude=-74.01):
     try:
@@ -355,50 +359,50 @@ def fetch_clinical_trials(condition="cancer", max_results=3):
 
 def process_pdf(uploaded_file, source_type="general"):
     try:
-        sample_text = """
-        ABSTRACT: This study examines cancer treatment options. 
-        BACKGROUND: Cancer is a leading cause of death worldwide.
-        METHODS: We conducted a clinical trial with 500 patients.
-        RESULTS: The new treatment showed 80% effectiveness.
-        CONCLUSIONS: The treatment is promising for future use.
+        with NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+            tmp.write(uploaded_file.read())
+            tmp_path = tmp.name
         
-        [Image: Cancer cell diagram]
-        [Table: Patient statistics]
-        ```
-        def calculate_treatment_effectiveness(patients):
-            return sum(p.success for p in patients) / len(patients)
-        ```
-        """
+        # Actual PDF processing - no mock
+        elements = partition_pdf(
+            filename=tmp_path,
+            strategy="auto",
+            chunking_strategy="by_title",
+            max_characters=1000,
+            combine_text_under_n_chars=300
+        )
         
-        chunks = [{
-            "text": "ABSTRACT: This study examines cancer treatment options.",
-            "section": "ABSTRACT",
-            "type": "text",
-            "source": uploaded_file.name
-        }, {
-            "text": "BACKGROUND: Cancer is a leading cause of death worldwide.",
-            "section": "BACKGROUND",
-            "type": "text",
-            "source": uploaded_file.name
-        }]
+        os.unlink(tmp_path)
+        chunks = []
+        tables = []
+        images = []
+        code_snippets = []
         
-        tables = [{
-            "table": pd.DataFrame({
-                "Group": ["Control", "Treatment"],
-                "Patients": [250, 250],
-                "Success": [100, 200]
-            }),
-            "html": "<table><tr><th>Group</th><th>Patients</th><th>Success</th></tr></table>",
-            "type": "table",
-            "source": uploaded_file.name
-        }]
-        
-        img = Image.new('RGB', (100, 100), color=(73, 109, 137))
-        images = [{"image": img, "type": "image", "source": uploaded_file.name}]
-        
-        code_snippets = [
-            "def calculate_treatment_effectiveness(patients):\n    return sum(p.success for p in patients) / len(patients)"
-        ]
+        for element in elements:
+            if hasattr(element, "text") and element.text.strip():
+                # Extract code snippets
+                snippets = extract_code_snippets(element.text)
+                code_snippets.extend(snippets)
+                
+                # Medical domain chunking
+                if source_type == "medical":
+                    medical_chunks = re.split(r"\n(ABSTRACT|BACKGROUND|METHODS|RESULTS|CONCLUSIONS):", 
+                                             element.text, flags=re.IGNORECASE)
+                    for i in range(0, len(medical_chunks)-1, 2):
+                        if i+1 < len(medical_chunks):
+                            chunks.append({
+                                "text": medical_chunks[i+1] + " " + medical_chunks[i+2],
+                                "section": medical_chunks[i],
+                                "type": "text",
+                                "source": uploaded_file.name
+                            })
+                else:
+                    chunks.append({
+                        "text": element.text,
+                        "source": uploaded_file.name,
+                        "page": element.metadata.page_number if element.metadata else 1,
+                        "type": "text"
+                    })
         
         return {
             "text_chunks": chunks,
@@ -488,7 +492,7 @@ def ingest_data(data, data_type="weather", metadata=None):
                 meta = {
                     "type": "text",
                     "source": chunk.get("source", "unknown"),
-                    "page": 1
+                    "page": chunk.get("page", 1)
                 }
                 if "section" in chunk:
                     meta["section"] = chunk["section"]
@@ -579,6 +583,7 @@ def ingest_data(data, data_type="weather", metadata=None):
 
 def hybrid_retrieval(question, max_results=5, method="hybrid", source_filter=None):
     start_time = time.time()
+    results = {"documents": [], "metadatas": [], "domains": []}
     
     # Build filter if source is specified
     where_filter = None
@@ -605,7 +610,8 @@ def hybrid_retrieval(question, max_results=5, method="hybrid", source_filter=Non
                         [domain] * len(results["documents"][0])
                     ))
                 except Exception as e:
-                    st.error(f"Error querying {domain} shard: {str(e)}")
+                    # Skip errors in individual shards
+                    continue
     
     # Lexical search
     lexical_results = []
@@ -625,6 +631,7 @@ def hybrid_retrieval(question, max_results=5, method="hybrid", source_filter=Non
                         [domain] * len(results["documents"][0])
                     ))
                 except:
+                    # Skip errors in individual shards
                     pass
     
     # Combine results
@@ -652,19 +659,17 @@ def hybrid_retrieval(question, max_results=5, method="hybrid", source_filter=Non
         final_results = unique_results[:max_results]
     
     # Format results
-    documents = [doc for doc, _, _ in final_results]
-    metadatas = [meta for _, meta, _ in final_results]
-    domains = [domain for _, _, domain in final_results]
+    results = {
+        "documents": [doc for doc, _, _ in final_results],
+        "metadatas": [meta for _, meta, _ in final_results],
+        "domains": [domain for _, _, domain in final_results]
+    }
     
     # Log performance
     latency = time.time() - start_time
-    log_retrieval_metrics(question, documents, method, latency)
+    log_retrieval_metrics(question, results["documents"], method, latency)
     
-    return {
-        "documents": documents,
-        "metadatas": metadatas,
-        "domains": domains
-    }
+    return results
 
 def chat_with_document(query, source_name, chat_history):
     """Chat with a specific document"""
@@ -708,7 +713,7 @@ with st.sidebar:
         if st.button("Preload Offline Embeddings"):
             with st.spinner("Loading embeddings for offline use..."):
                 load_offline_embeddings()
-                st.success(f"Loaded {sum(len(v['documents']) for v in OFFLINE_EMBEDDINGS.values())} embeddings")
+                st.success(f"Loaded {sum(len(v['documents']) for v in OFFLINE_EMBEDDINGS.values()} embeddings")
     
     st.subheader("Data Sources")
     latitude = st.number_input("Latitude", value=40.71)
@@ -761,11 +766,11 @@ with tab1:
 # Tab 2: Document Upload
 with tab2:
     st.header("Document Processing")
-    file_type = st.radio("File Type", ["PDF", "CSV"], horizontal=True)
+    file_type = st.radio("File Type", ["PDF", "CSV"], horizontal=True, key="file_type_radio")
     
     if file_type == "PDF":
         uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
-        source_type = st.radio("Content Type", ["General", "Medical"], horizontal=True)
+        source_type = st.radio("Content Type", ["General", "Medical"], horizontal=True, key="content_type_radio")
         
         if uploaded_files:
             for uploaded_file in uploaded_files:
@@ -778,7 +783,7 @@ with tab2:
                             with st.expander("View extracted content"):
                                 st.subheader("Text Chunks")
                                 for i, chunk in enumerate(result["text_chunks"][:3]):
-                                    st.caption(f"Chunk {i+1}")
+                                    st.caption(f"Chunk {i+1} (Page {chunk.get('page', 1)})")
                                     st.text(chunk["text"][:300] + "...")
                                 
                                 if result["tables"]:
@@ -790,7 +795,7 @@ with tab2:
                                     st.subheader("Images")
                                     cols = st.columns(2)
                                     for i, img in enumerate(result["images"][:2]):
-                                        cols[i % 2].image(img["image"], caption=f"Image {i+1}")
+                                        cols[i % 2].image(img["image"], caption=f"Page {img.get('page', 1)}")
                                 
                                 if result["code_snippets"]:
                                     st.subheader("Code Snippets")
@@ -856,9 +861,12 @@ with tab5:
     search_term = st.text_input("Search term for context", "cancer treatment")
     
     if st.button("Find Context"):
-        results = hybrid_retrieval(search_term, 1)
-        if results["documents"]:
-            st.session_state.qa_context = results["documents"][0]
+        with st.spinner("Searching for context..."):
+            results = hybrid_retrieval(search_term, 1)
+            if results["documents"]:
+                st.session_state.qa_context = results["documents"][0]
+            else:
+                st.warning("No context found for this term")
     
     if "qa_context" in st.session_state:
         st.subheader("Retrieved Context")
@@ -991,8 +999,8 @@ st.sidebar.subheader("Implementation Status")
 st.sidebar.markdown("""
 - ✅ **Advanced KG Integration**: SciSpacy + UMLS/Wikidata
 - ✅ **Multi-modal Support**: PDFs, CSV, images, tables, code
-- ✅ **Scalable Vector Store**: Domain sharding
+- ✅ **Scalable Vector Store**: Domain sharding with proper dimensions
 - ✅ **MLOps & Monitoring**: Logging + nightly jobs
-- ✅ **Document Chat**: Interactive Q&A with uploaded files
+- ✅ **Document Chat**: Interactive document conversations
 """)
 st.sidebar.progress(100, text="Production Ready")
