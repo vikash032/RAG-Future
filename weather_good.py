@@ -246,7 +246,7 @@ def get_real_weather_data(city_name="Delhi") -> Dict:
     Fetch real weather data from OpenWeatherMap API
     Enhanced with comprehensive weather information
     """
-    API_KEY = os.getenv("OPENWEATHER_API_KEY", "demo_key") or st.secrets.get("OPENWEATHER_API_KEY")
+    API_KEY = (os.getenv("OPENWEATHER_API_KEY") or st.secrets.get("OPENWEATHER_API_KEY")).strip('" ')
     
     if API_KEY == "demo_key":
         st.warning("⚠️ Please set OPENWEATHER_API_KEY in your .env file for real weather data")
