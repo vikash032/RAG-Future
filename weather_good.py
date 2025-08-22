@@ -19,7 +19,9 @@ import textwrap
 from datetime import datetime, timedelta
 from tempfile import NamedTemporaryFile
 from typing import Dict, List, Optional, Tuple
-
+import requests
+from datetime import datetime
+from typing import Dict
 import streamlit as st
 import requests
 import numpy as np
@@ -243,43 +245,58 @@ def display_system_stats():
 # ----------------------
 def get_real_weather_data(city_name="Delhi") -> Dict:
     """
-    Fetch real weather data from OpenWeatherMap API
-    Enhanced with comprehensive weather information
+    Fetch real weather data from OpenWeatherMap API with error handling.
     """
-    API_KEY = (os.getenv("OPENWEATHER_API_KEY") or st.secrets.get("OPENWEATHER_API_KEY")).strip('" ')
-    
-    if API_KEY == "demo_key":
-        st.warning("⚠️ Please set OPENWEATHER_API_KEY in your .env file for real weather data")
+    try:
+        API_KEY = st.secrets["OPENWEATHER_API_KEY"]  # Direct access for Streamlit
+    except KeyError:
+        st.warning("⚠️ OPENWEATHER_API_KEY not found in Streamlit secrets.")
         return get_fallback_weather(city_name)
     
+    if not API_KEY or API_KEY.lower() == "demo_key":
+        st.warning("⚠️ Please set a valid OPENWEATHER_API_KEY.")
+        return get_fallback_weather(city_name)
+
+    if city_name not in INDIAN_CITIES:
+        city_name = "Delhi"
+    
+    city_coords = INDIAN_CITIES[city_name]
+    lat, lon = city_coords["lat"], city_coords["lon"]
+    
+    # Current weather API URL
+    current_url = f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
+    
+    # Forecast API URL
+    forecast_url = f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={API_KEY}&units=metric&cnt=8"
+    
+    # Fetch current weather
+    current_response = requests.get(current_url, timeout=10)
+    
+    if current_response.status_code == 401:
+        st.error("❌ Invalid API Key or not yet activated. Check your OpenWeather account.")
+        return get_fallback_weather(city_name)
+    
+    if current_response.status_code != 200:
+        st.error(f"❌ Weather API Error: {current_response.status_code}")
+        return get_fallback_weather(city_name)
+    
+    current_data = current_response.json()
+    
+    # Fetch forecast data
+    forecast_data = []
     try:
-        if city_name not in INDIAN_CITIES:
-            city_name = "Delhi"
-            
-        city_coords = INDIAN_CITIES[city_name]
-        lat, lon = city_coords["lat"], city_coords["lon"]
-        
-        # Current weather
-        current_url = f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={API_KEY}&units=metric"
-        
-        # Forecast weather (for trends)
-        forecast_url = f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={API_KEY}&units=metric&cnt=8"
-        
-        current_response = requests.get(current_url, timeout=10)
-        
-        if current_response.status_code == 200:
-            data = current_response.json()
-            current_time = datetime.now()
-            
-            # Try to get forecast data
-            forecast_data = []
-            try:
-                forecast_response = requests.get(forecast_url, timeout=10)
-                if forecast_response.status_code == 200:
-                    forecast_json = forecast_response.json()
-                    forecast_data = forecast_json.get("list", [])[:4]  # Next 12 hours
-            except:
-                pass
+        forecast_response = requests.get(forecast_url, timeout=10)
+        if forecast_response.status_code == 200:
+            forecast_json = forecast_response.json()
+            forecast_data = forecast_json.get("list", [])[:4]  # Next 12 hours
+    except Exception as e:
+        st.warning(f"⚠️ Could not fetch forecast data: {e}")
+    
+    return {
+        "current": current_data,
+        "forecast": forecast_data,
+        "timestamp": datetime.now().isoformat()
+    }
             
             # Enhanced weather data
             weather_info = {
