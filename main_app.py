@@ -831,8 +831,8 @@ def main():
                 # Generate answer
                 st.markdown("### 📋 Generated Answer")
                 st.markdown(core.smart_answer_generation(query, results))
-            else:
                 st.warning("❌ No relevant results found. Try a different query or check your document uploads.")
+
 
 # Tab 6: Enhanced Document Chat
 with tab6:
