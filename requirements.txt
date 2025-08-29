@@ -37,7 +37,7 @@ langchain
 unstructured[local-inference]
 pdfminer.six
 pi-heif
-pydantic_settings
+pydantic-settings==2.10.0
 pdf2image
 PyPDF2
 pillow-heif
