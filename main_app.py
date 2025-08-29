@@ -805,7 +805,7 @@ def main():
                     
                     # Display debug info
                     with st.expander("🔧 Search Details", expanded=False):
-                    st.json(results["debug_info"])
+                        st.json(results["debug_info"])
                 
                 # Display results
                 for i, (doc, meta, score, domain) in enumerate(zip(
