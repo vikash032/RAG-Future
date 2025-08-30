@@ -1719,6 +1719,7 @@ def main():
                 st.rerun()
 
     # Tab 7: Enhanced System Dashboard
+    import pandas as pd
     with tab7:
         st.markdown("### 📊 System Dashboard")
         
