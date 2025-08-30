@@ -1,11 +1,15 @@
-# ensure typing and pydantic v2 first
-typing-extensions>=4.6.1
+# ensure modern pydantic + settings (you said you need pydantic-settings)
 pydantic>=2.7.0
 pydantic-settings==2.10.0
+typing-extensions>=4.6.1
 
-# try newer thinc & spaCy that may be pydantic-v2-compatible
+# make blis compatible with thinc >=8.3.x / spacy >=3.8.x
+blis>=1.3.0,<1.4.0
+
+# use newer thinc & spacy (already recommended)
 thinc>=8.3.6
 spacy>=3.8.0
+
 
 # then the rest of your original file (no change)
 numpy==1.26.4
