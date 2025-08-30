@@ -985,3 +985,5 @@ def main():
                         mime="application/json"
                 )
                        
+if name == "main":
+main()
