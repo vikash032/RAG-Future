@@ -1769,12 +1769,19 @@ def main():
         
         # Collection details
         st.markdown("#### 🗂️ Collection Details")
-        if stats.get("documents_by_domain"):
-            domain_df = pd.DataFrame({
-                "Collection": list(stats["documents_by_domain"].keys()),
-                "Documents": list(stats["documents_by_domain"].values())
-            })
-            st.dataframe(domain_df, use_container_width=True)
+        if stats and isinstance(stats, dict) and stats.get("documents_by_domain"):
+            domain_data = stats.get("documents_by_domain", {})
+            
+            if domain_data:
+                domain_df = pd.DataFrame({
+                    "Collection": list(domain_data.keys()),
+                    "Documents": list(domain_data.values())
+                })
+                st.dataframe(domain_df, use_container_width=True)
+            else:
+                st.info("No documents in collections yet")
+        else:
+            st.info("No documents in collections yet")
 
             # 🔥 Add a Plotly Bar Chart
             import plotly.express as px
