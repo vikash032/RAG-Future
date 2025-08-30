@@ -1,13 +1,14 @@
 # config.py
-from pydantic_settings import BaseSettings
-from typing import List, Dict, Optional
 import os
+from typing import List, Optional
+from pydantic import Field
+from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    # API Keys
-    openweather_api_key: str = st.secrets["OPENWEATHER_API_KEY"]
-    arxiv_api_key: Optional[str] = None
-    clinical_trials_api_key: Optional[str] = None
+    # API Keys - load from environment variables by default
+    openweather_api_key: Optional[str] = Field(default=None, env="OPENWEATHER_API_KEY")
+    arxiv_api_key: Optional[str] = Field(default=None, env="ARXIV_API_KEY")
+    clinical_trials_api_key: Optional[str] = Field(default=None, env="CLINICAL_TRIALS_API_KEY")
     
     # Model Configuration
     embedding_model: str = "BAAI/bge-base-en-v1.5"
@@ -33,5 +34,36 @@ class Settings(BaseSettings):
         env_file = ".env"
         case_sensitive = False
 
-# Global settings instance
+# Global settings instance you import elsewhere
 settings = Settings()
+
+
+def apply_streamlit_secrets(st):
+    """
+    Override settings with Streamlit secrets at runtime.
+    Call this from your Streamlit app AFTER import streamlit as st and AFTER Streamlit has initialized.
+    Example (in main_app.py or your Streamlit entrypoint):
+        import streamlit as st
+        from config import settings, apply_streamlit_secrets
+        apply_streamlit_secrets(st)
+
+    This function will silently ignore missing secrets or errors.
+    """
+    try:
+        if not hasattr(st, "secrets"):
+            return
+
+        # mapping from Streamlit secret keys to Settings attribute names
+        key_map = {
+            "OPENWEATHER_API_KEY": "openweather_api_key",
+            "ARXIV_API_KEY": "arxiv_api_key",
+            "CLINICAL_TRIALS_API_KEY": "clinical_trials_api_key",
+        }
+
+        for secret_key, attr_name in key_map.items():
+            val = st.secrets.get(secret_key)
+            if val:
+                setattr(settings, attr_name, val)
+    except Exception:
+        # keep this function safe and non-failing during import/CI
+        return
