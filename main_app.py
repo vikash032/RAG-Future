@@ -1024,17 +1024,13 @@ core = CoreFunctions()
 # Weather Functions
 # ----------------------
 def get_real_weather_data(city_name="Delhi") -> Dict:
-    """
-    Fetch real weather data from OpenWeatherMap API with error handling.
-    Returns an enhanced weather_info dict or falls back to demo data.
-    """
     try:
-        API_KEY = os.getenv("OPENWEATHER_API_KEY", settings.openweather_api_key)
+        API_KEY = st.secrets.get("OPENWEATHER_API_KEY")
     except Exception:
-        API_KEY = settings.openweather_api_key
+        API_KEY = None
 
-    if not API_KEY or API_KEY.lower() == "demo_key":
-        st.warning("⚠️ Please set a valid OPENWEATHER_API_KEY.")
+    if not API_KEY:
+        st.warning("⚠️ Please set a valid OPENWEATHER_API_KEY in Streamlit secrets.")
         return get_fallback_weather(city_name)
 
     if city_name not in INDIAN_CITIES:
@@ -1043,44 +1039,29 @@ def get_real_weather_data(city_name="Delhi") -> Dict:
     city_coords = INDIAN_CITIES[city_name]
     lat, lon = city_coords["lat"], city_coords["lon"]
 
-    # Current weather API URL
     current_url = (
         f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}"
         f"&appid={API_KEY}&units=metric"
     )
-
-    # Forecast API URL
     forecast_url = (
         f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}"
         f"&appid={API_KEY}&units=metric&cnt=8"
     )
 
     try:
-        # Fetch current weather
         current_response = requests.get(current_url, timeout=10)
-
-        if current_response.status_code == 401:
-            st.error("❌ Invalid API Key or not yet activated. Check your OpenWeather account.")
-            return get_fallback_weather(city_name)
-
         if current_response.status_code != 200:
             st.error(f"❌ Weather API Error: {current_response.status_code}")
             return get_fallback_weather(city_name)
 
         data = current_response.json()
+        forecast_data = []
+        forecast_response = requests.get(forecast_url, timeout=10)
+        if forecast_response.status_code == 200:
+            forecast_data = forecast_response.json().get("list", [])[:6]
+
         current_time = datetime.now()
 
-        # Fetch forecast data
-        forecast_data = []
-        try:
-            forecast_response = requests.get(forecast_url, timeout=10)
-            if forecast_response.status_code == 200:
-                forecast_json = forecast_response.json()
-                forecast_data = forecast_json.get("list", [])[:6]  # up to next ~18 hours
-        except Exception as e:
-            st.warning(f"⚠️ Could not fetch forecast data: {e}")
-
-        # Enhanced weather data
         weather_info = {
             "city": city_name,
             "state": city_coords.get("state", ""),
@@ -1091,7 +1072,7 @@ def get_real_weather_data(city_name="Delhi") -> Dict:
             "wind_direction": data["wind"].get("deg", 0),
             "description": data["weather"][0]["description"].title(),
             "icon": data["weather"][0]["icon"],
-            "feels_like": round(data["main"]["feels_like", 1]),
+            "feels_like": round(data["main"]["feels_like"], 1),
             "pressure": data["main"]["pressure"],
             "visibility": data.get("visibility", 10000) / 1000,
             "uv_index": data.get("uvi", 0),
@@ -1101,29 +1082,27 @@ def get_real_weather_data(city_name="Delhi") -> Dict:
             "time": current_time.isoformat(),
             "location": f"{lat},{lon}",
             "forecast": forecast_data,
-            "air_quality": "Good",  # Placeholder - would need separate API
+            "air_quality": "Good",
             "text": f"""🌤️ Weather Report for {city_name}, {city_coords.get('state', '')}
 📅 Date: {current_time.strftime('%Y-%m-%d %H:%M IST')}
 🌡️ Temperature: {round(data["main"]["temp"], 1)}°C (Feels like {round(data["main"]["feels_like"], 1)}°C)
 🌈 Condition: {data["weather"][0]["description"].title()}
 💧 Humidity: {data["main"]["humidity"]}%
-🌧️ Precipitation: {data.get("rain", {}).get("1h", 0.0)}mm (last hour)
+🌧️ Precipitation: {data.get("rain", {}).get("1h", 0.0)}mm
 💨 Wind: {round(data["wind"]["speed"] * 3.6, 1)} km/h
 🎯 Pressure: {data["main"]["pressure"]} hPa
 👁️ Visibility: {data.get("visibility", 10000) / 1000} km
 ☁️ Cloudiness: {data["clouds"]["all"]}%
-🌅 Sunrise: {datetime.fromtimestamp(data["sys"]["sunrise"]).strftime("%H:%M")}
-🌇 Sunset: {datetime.fromtimestamp(data["sys"]["sunset"]).strftime("%H:%M")}"""
+🌅 Sunrise: {datetime.fromtimestamp(data["sys"]["sunrise"]).strftime('%H:%M')}
+🌇 Sunset: {datetime.fromtimestamp(data["sys"]["sunset"]).strftime('%H:%M')}"""
         }
 
         return weather_info
 
-    except requests.exceptions.Timeout:
-        st.warning("Weather API timeout. Using fallback data.")
-        return get_fallback_weather(city_name)
     except Exception as e:
         st.warning(f"Weather API error: {str(e)}")
         return get_fallback_weather(city_name)
+
 
 
 def get_fallback_weather(city_name="Delhi") -> Dict:
