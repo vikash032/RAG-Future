@@ -1800,9 +1800,9 @@ def main():
                 "Source": list(stats["documents_by_source"].keys()),
                 "Documents": list(stats["documents_by_source"].values())
         }) 
-             st.dataframe(source_df, use_container_width=True)
+            st.dataframe(source_df, use_container_width=True)
         else:
-             st.info("No source data available")
+            st.info("No source data available")
 
         
         # System actions
