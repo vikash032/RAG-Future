@@ -1,14 +1,10 @@
-# Top-level compatibility pins (ensure Pydantic v2 + spaCy/thinc compatibility)
 typing-extensions>=4.6.1
 pydantic>=2.7.0
 pydantic-settings==2.10.0
-
-# blis that matches thinc>=8.3.x
 blis>=1.3.0,<1.4.0
-
-# thinc & spaCy versions compatible with Pydantic v2
 thinc>=8.3.6
 spacy>=3.8.0
+
 
 # Core numeric & ML libraries
 numpy==1.26.4
