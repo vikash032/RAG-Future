@@ -1431,6 +1431,39 @@ def main():
     with tab1:
         render_weather_dashboard()
 
+        # Add a divider for clarity
+        st.markdown("---")
+        st.subheader("📈 Weather Forecast Visualization")
+
+        # Example: Using forecast data from your weather API
+        if "forecast" in st.session_state and st.session_state["forecast"]:
+            import pandas as pd
+            import plotly.express as px
+        
+            # Prepare forecast data
+            forecast_data = st.session_state["forecast"]
+            df = pd.DataFrame([
+                {
+                    "Time": f["dt_txt"],
+                    "Temperature": f["main"]["temp"],
+                    "Humidity": f["main"]["humidity"]
+                }
+                for f in forecast_data
+            ])
+
+            # Create a Plotly line chart
+            fig = px.line(
+                df,
+                x="Time",
+                y="Temperature",
+                title="Next 24 Hours Temperature Forecast",
+                markers=True
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("ℹ️ No forecast data available to plot.")
+            
     # Tab 2: Enhanced Document Upload
     with tab2:
         st.markdown("### 📄 Document Processing Center")
