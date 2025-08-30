@@ -834,154 +834,222 @@ def main():
                 st.warning("❌ No relevant results found. Try a different query or check your document uploads.")
 
 
-# Tab 6: Enhanced Document Chat
-with tab6:
-    st.markdown("### 💬 Document Chat Interface")
-    
-    # Source selection
-    available_sources = list(st.session_state.system_stats.get("documents_by_source", {}).keys())
-    if not available_sources:
-        st.info("📚 Upload documents first to enable chat functionality")
-    else:
-        selected_source = st.selectbox(
-            "📄 Select Document to Chat With",
-            available_sources,
-            key="chat_source"
-        )
-        
-        # Initialize chat history for this source if not exists
-        if selected_source not in st.session_state.chat_histories:
-            st.session_state.chat_histories[selected_source] = []
-        
-        chat_history = st.session_state.chat_histories[selected_source]
-        
-        # Display chat history
-        st.markdown("#### 💭 Conversation History")
-        chat_container = st.container()
-        
-        with chat_container:
-            for message in chat_history:
-                if message["user"]:
-                    st.markdown(f"**👤 You ({message['timestamp']}):** {message['user']}")
-                if message["assistant"]:
-                    st.markdown(f"**🤖 Assistant ({message['timestamp']}):**")
-                    st.markdown(message["assistant"])
-                st.divider()
-        
-        # Chat input
-        chat_input = st.text_input(
-            "💬 Ask about the document:",
-            placeholder=f"Ask anything about {selected_source}...",
-            key="chat_input"
-        )
-        
-        if st.button("🚀 Send Message", type="primary") and chat_input:
-            # Add user message to history
-            chat_history = enhanced_chat_with_document(chat_input, selected_source, chat_history)
-            st.session_state.chat_histories[selected_source] = chat_history
-            st.rerun()
+     # Tab 5: Enhanced Knowledge Query
+     with tab5:
+          st.markdown("### 🔍 Knowledge Base Query")
+          
+          col1, col2 = st.columns([3, 1])
+          with col1:
+               query = st.text_input("❓ Your Question", placeholder="Ask anything about your uploaded documents...")
+          with col2:
+               max_results = st.number_input("📊 Max Results", min_value=1, max_value=10, value=3)
+          
+          source_filter = st.selectbox(
+               "📁 Filter by Source (Optional)",
+               [""] + list(st.session_state.system_stats.get("documents_by_source", {}).keys())
+          )
+          
+          if st.button("🚀 Search Knowledge Base", type="primary") and query:
+               with st.spinner("🔍 Searching through documents..."):
+                    results = core.hybrid_retrieval(
+                         query, 
+                         max_results=max_results, 
+                         source_filter=source_filter if source_filter else None,
+                         debug=True
+                    )
+                    
+                    if results["documents"]:
+                         st.success(f"✅ Found {len(results['documents'])} relevant results")
+                         
+                         # Display debug info
+                         with st.expander("🔧 Search Details", expanded=False):
+                              st.json(results["debug_info"])
+                    
+                    # Display results
+                    for i, (doc, meta, score, domain) in enumerate(zip(
+                         results["documents"], 
+                         results["metadatas"], 
+                         results["scores"], 
+                         results["domains"]
+                    )):
+                         with st.expander(f"📄 Result {i+1} | Score: {score:.1%} | {meta.get('source', 'Unknown')}", expanded=i==0):
+                              st.markdown(f"**Source:** {meta.get('source', 'Unknown')}")
+                              if meta.get('page'):
+                                   st.markdown(f"**Page:** {meta.get('page')}")
+                              if meta.get('row'):
+                                   st.markdown(f"**Row:** {meta.get('row')}")
+                              st.markdown(f"**Domain:** {domain}")
+                              st.markdown(f"**Relevance Score:** {score:.1%}")
+                              
+                              st.markdown("**Content:**")
+                              st.write(doc)
+                              
+                              st.divider()
+                    
+                    # Generate answer
+                    st.markdown("### 📋 Generated Answer")
+                    st.markdown(core.smart_answer_generation(query, results))
+                    st.warning("❌ No relevant results found. Try a different query or check your document uploads.")
 
-# Tab 7: Enhanced System Dashboard
-with tab7:
-    st.markdown("### 📊 System Dashboard")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown("#### 🖥️ System Health")
-        cpu_usage = psutil.cpu_percent()
-        memory_usage = psutil.virtual_memory().percent
-        
-        st.metric("CPU Usage", f"{cpu_usage}%", 
-                 delta="High" if cpu_usage > 80 else "Normal" if cpu_usage > 60 else "Low",
-                 delta_color="inverse" if cpu_usage > 80 else "normal")
-        
-        st.metric("Memory Usage", f"{memory_usage}%",
-                 delta="High" if memory_usage > 80 else "Normal" if memory_usage > 60 else "Low",
-                 delta_color="inverse" if memory_usage > 80 else "normal")
-        
-        # Disk usage
-        try:
-            disk_usage = psutil.disk_usage('/').percent
-            st.metric("Disk Usage", f"{disk_usage}%",
-                     delta="High" if disk_usage > 80 else "Normal" if disk_usage > 60 else "Low",
-                     delta_color="inverse" if disk_usage > 80 else "normal")
-        except:
-            pass
-    
-    with col2:
-        st.markdown("#### 📚 Document Statistics")
-        stats = st.session_state.system_stats
-        
-        st.metric("Total Documents", stats.get("total_documents", 0))
-        st.metric("Collections", len(stats.get("documents_by_domain", {})))
-        st.metric("Unique Sources", len(stats.get("documents_by_source", {})))
-    
-    with col3:
-        st.markdown("#### ⚡ Performance")
-        if torch and torch.cuda.is_available():
-            try:
-                gpu_memory = torch.cuda.memory_allocated(0) / 1024**3
-                st.metric("GPU Memory", f"{gpu_memory:.1f} GB")
-            except:
-                pass
-        
-        # Display last job run time
-        st.metric("Last Refresh", st.session_state.last_job_run)
-    
-    # Collection details
-    st.markdown("#### 🗂️ Collection Details")
-    if stats.get("documents_by_domain"):
-        domain_df = pd.DataFrame({
-            "Collection": list(stats["documents_by_domain"].keys()),
-            "Documents": list(stats["documents_by_domain"].values())
-        })
-        st.dataframe(domain_df, use_container_width=True)
-    else:
-        st.info("No documents in collections yet")
-    
-    # Source details
-    st.markdown("#### 📄 Source Details")
-    if stats.get("documents_by_source"):
-        source_df = pd.DataFrame({
-            "Source": list(stats["documents_by_source"].keys()),
-            "Documents": list(stats["documents_by_source"].values())
-        })
-        st.dataframe(source_df, use_container_width=True)
-    
-    # System actions
-    st.markdown("#### ⚙️ System Actions")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("🔄 Refresh All Data", type="primary"):
-            st.session_state.last_job_run = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            st.rerun()
-    
-    with col2:
-        if st.button("🧹 Clear All Chats"):
-            st.session_state.chat_histories = {}
-            st.success("All chat histories cleared")
-    
-    with col3:
-        if st.button("📊 Export Statistics"):
-            # Create a downloadable report
-            report_data = {
-                "timestamp": datetime.now().isoformat(),
-                "system_stats": st.session_state.system_stats,
-                "weather_cities": list(INDIAN_CITIES.keys()),
-                "arxiv_papers_count": len(st.session_state.arxiv_papers),
-                "clinical_trials_count": len(st.session_state.clinical_trials)
-            }
+
+     # Tab 6: Enhanced Document Chat
+     with tab6:
+          st.markdown("### 💬 Document Chat Interface")
+          
+          # Source selection
+          available_sources = list(st.session_state.system_stats.get("documents_by_source", {}).keys())
+          if not available_sources:
+               st.info("📚 Upload documents first to enable chat functionality")
+          else:
+               selected_source = st.selectbox(
+                    "📄 Select Document to Chat With",
+                    available_sources,
+                    key="chat_source"
+               )
+               
+               # Initialize chat history for this source if not exists
+               if selected_source not in st.session_state.chat_histories:
+                    st.session_state.chat_histories[selected_source] = []
+               
+               chat_history = st.session_state.chat_histories[selected_source]
+               
+               # Display chat history
+               st.markdown("#### 💭 Conversation History")
+               chat_container = st.container()
+               
+               with chat_container:
+                    for message in chat_history:
+                         if message["user"]:
+                              st.markdown(f"**👤 You ({message['timestamp']}):** {message['user']}")
+                         if message["assistant"]:
+                              st.markdown(f"**🤖 Assistant ({message['timestamp']}):**")
+                              st.markdown(message["assistant"])
+                         st.divider()
+               
+               # Chat input
+               chat_input = st.text_input(
+                    "💬 Ask about the document:",
+                    placeholder=f"Ask anything about {selected_source}...",
+                    key="chat_input"
+               )
+               
+               if st.button("🚀 Send Message", type="primary") and chat_input:
+                    # Add user message to history
+                    chat_history = enhanced_chat_with_document(chat_input, selected_source, chat_history)
+                    st.session_state.chat_histories[selected_source] = chat_history
+                    st.rerun()
+
+     # Tab 7: Enhanced System Dashboard
+     with tab7:
+          st.markdown("### 📊 System Dashboard")
+          
+          col1, col2, col3 = st.columns(3)
+          
+          with col1:
+               st.markdown("#### 🖥️ System Health")
+               cpu_usage = psutil.cpu_percent()
+               memory_usage = psutil.virtual_memory().percent
+               
+               st.metric("CPU Usage", f"{cpu_usage}%", 
+                        delta="High" if cpu_usage > 80 else "Normal" if cpu_usage > 60 else "Low",
+                        delta_color="inverse" if cpu_usage > 80 else "normal")
+               
+               st.metric("Memory Usage", f"{memory_usage}%",
+                        delta="High" if memory_usage > 80 else "Normal" if memory_usage > 60 else "Low",
+                        delta_color="inverse" if memory_usage > 80 else "normal")
+               
+               # Disk usage
+               try:
+                    disk_usage = psutil.disk_usage('/').percent
+                    st.metric("Disk Usage", f"{disk_usage}%",
+                             delta="High" if disk_usage > 80 else "Normal" if disk_usage > 60 else "Low",
+                             delta_color="inverse" if disk_usage > 80 else "normal")
+               except:
+                    pass
+          
+          with col2:
+               st.markdown("#### 📚 Document Statistics")
+               stats = st.session_state.system_stats
+               
+               st.metric("Total Documents", stats.get("total_documents", 0))
+               st.metric("Collections", len(stats.get("documents_by_domain", {})))
+               st.metric("Unique Sources", len(stats.get("documents_by_source", {})))
+          
+          with col3:
+               st.markdown("#### ⚡ Performance")
+               if torch and torch.cuda.is_available():
+                    try:
+                         gpu_memory = torch.cuda.memory_allocated(0) / 1024**3
+                         st.metric("GPU Memory", f"{gpu_memory:.1f} GB")
+                    except:
+                         pass
+               
+               # Display last job run time
+               st.metric("Last Refresh", st.session_state.last_job_run)
+          
+          # Collection details
+          st.markdown("#### 🗂️ Collection Details")
+          if stats.get("documents_by_domain"):
+               domain_df = pd.DataFrame({
+                    "Collection": list(stats["documents_by_domain"].keys()),
+                    "Documents": list(stats["documents_by_domain"].values())
+               })
+               st.dataframe(domain_df, use_container_width=True)
+          else:
+               st.info("No documents in collections yet")
+          
+          # Source details
+          st.markdown("#### 📄 Source Details")
+          if stats.get("documents_by_source"):
+               source_df = pd.DataFrame({
+                    "Source": list(stats["documents_by_source"].keys()),
+                    "Documents": list(stats["documents_by_source"].values())
+               })
+               st.dataframe(source_df, use_container_width=True)
+          
+          # System actions
+          st.markdown("#### ⚙️ System Actions")
+          col1, col2, col3 = st.columns(3)
+          
+          with col1:
+               if st.button("🔄 Refresh All Data", type="primary"):
+                    st.session_state.last_job_run = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    st.rerun()
+          
+          with col2:
+               if st.button("🧹 Clear All Chats"):
+                    st.session_state.chat_histories = {}
+                    st.success("All chat histories cleared")
+          
+          with col3:
+               if st.button("📊 Export Statistics"):
+                    # Create a downloadable report
+                    report_data = {
+                         "timestamp": datetime.now().isoformat(),
+                         "system_stats": st.session_state.system_stats,
+                         "weather_cities": list(INDIAN_CITIES.keys()),
+                         "arxiv_papers_count": len(st.session_state.arxiv_papers),
+                         "clinical_trials_count": len(st.session_state.clinical_trials)
+                    }
+                    
+                    # Convert to JSON for download
+                    import json
+                    json_report = json.dumps(report_data, indent=2)
+                    
+                    st.download_button(
+                         label="📥 Download Report",
+                         data=json_report,
+                         file_name=f"system_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                         mime="application/json"
+                    )
             
-            # Convert to JSON for download
-            import json
-            json_report = json.dumps(report_data, indent=2)
-            
-            st.download_button(
-                label="📥 Download Report",
-                data=json_report,
-                file_name=f"system_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json"
-            )
-                        
+                    # Convert to JSON for download
+                    import json
+                    json_report = json.dumps(report_data, indent=2)
+                    
+                    st.download_button(
+                         label="📥 Download Report",
+                         data=json_report,
+                         file_name=f"system_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                         mime="application/json"
+                    )                        
