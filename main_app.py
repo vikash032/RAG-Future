@@ -1169,7 +1169,7 @@ def render_weather_dashboard():
         selected_state = st.selectbox("🗺️ Select State:", ["All States"] + states, key="state_selector")
         
         if selected_state == "All States":
-            available_c cities = list(INDIAN_CITIES.keys())
+            available_cities = list(INDIAN_CITIES.keys())
         else:
             available_cities = [city for city, info in INDIAN_CITIES.items() if info["state"] == selected_state]
         
