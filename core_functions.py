@@ -49,7 +49,7 @@ try:
 except ImportError:
     arxiv = None
 
-from .config import settings
+from config import settings
 
 class CoreFunctions:
     def __init__(self):
