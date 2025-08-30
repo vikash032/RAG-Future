@@ -12,6 +12,7 @@ import io
 import base64
 import time
 import uuid
+import pandas as pd
 import gc
 import re
 import hashlib
