@@ -1773,6 +1773,20 @@ def main():
                 "Documents": list(stats["documents_by_domain"].values())
             })
             st.dataframe(domain_df, use_container_width=True)
+
+            # 🔥 Add a Plotly Bar Chart
+            import plotly.express as px
+            fig = px.bar(
+                domain_df,
+                x="Collection",
+                y="Documents",
+                title="📊 Documents per Collection",
+                labels={"Collection": "Collection", "Documents": "Number of Documents"},
+                text="Documents"
+            )
+
+            fig.update_traces(textposition='outside')
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No documents in collections yet")
         
