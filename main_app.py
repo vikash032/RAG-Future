@@ -1,4 +1,4 @@
-# main_app.py
+# main_app.py (fixed version)
 # Fix SQLite for Chroma - MUST BE AT THE TOP
 __import__('pysqlite3')
 import sys
@@ -94,6 +94,7 @@ except Exception:
 
 try:
     import chromadb
+    from chromadb.config import Settings as ChromaSettings
 except Exception:
     chromadb = None
 
@@ -401,9 +402,9 @@ class CoreFunctions:
 
     # Model Loading
     @st.cache_resource(show_spinner=False)
-    def get_embedding_model(self):
+    def get_embedding_model(_self):
         """Return SentenceTransformer model with progress tracking"""
-        if not self.check_memory():
+        if not _self.check_memory():
             st.error("🚫 Insufficient memory for embedding model")
             return None
         
@@ -421,9 +422,9 @@ class CoreFunctions:
             return None
 
     @st.cache_resource(show_spinner=False)
-    def get_reranker(self):
+    def get_reranker(_self):
         """Load reranker model with proper error handling"""
-        if not self.check_memory():
+        if not _self.check_memory():
             return None
         if FlagReranker is None:
             return None
@@ -437,7 +438,6 @@ class CoreFunctions:
             return None
 
     # Vector Store Management
-    @st.cache_resource(show_spinner=False)
     def get_vector_store(self):
         """Enhanced vector store initialization with better error handling"""
         try:
@@ -1091,7 +1091,7 @@ def get_real_weather_data(city_name="Delhi") -> Dict:
             "wind_direction": data["wind"].get("deg", 0),
             "description": data["weather"][0]["description"].title(),
             "icon": data["weather"][0]["icon"],
-            "feels_like": round(data["main"]["feels_like"], 1),
+            "feels_like": round(data["main"]["feels_like", 1),
             "pressure": data["main"]["pressure"],
             "visibility": data.get("visibility", 10000) / 1000,
             "uv_index": data.get("uvi", 0),
@@ -1169,7 +1169,7 @@ def render_weather_dashboard():
         selected_state = st.selectbox("🗺️ Select State:", ["All States"] + states, key="state_selector")
         
         if selected_state == "All States":
-            available_cities = list(INDIAN_CITIES.keys())
+            available_c cities = list(INDIAN_CITIES.keys())
         else:
             available_cities = [city for city, info in INDIAN_CITIES.items() if info["state"] == selected_state]
         
@@ -1375,7 +1375,7 @@ def display_system_stats():
 def main():
     """Main application with enhanced UI and functionality"""
     
-    # Initialize vector store
+    # Initialize vector store (without caching)
     if not hasattr(core, 'vector_client') or core.vector_client is None:
         core.vector_client, core.collections = core.get_vector_store()
     
@@ -1508,7 +1508,6 @@ def main():
 
             if uploaded_file:
                 file_hash = hashlib.md5(uploaded_file.getvalue()).hexdigest()
-                
                 # Display file info
                 st.info(f"📊 **File:** {uploaded_file.name} | **Size:** {uploaded_file.size / 1024:.1f} KB")
 
@@ -1591,7 +1590,7 @@ def main():
                     st.markdown(f"**Sponsor:** {trial.get('sponsor', 'Unknown')}")
                     st.markdown(f"**Participants:** {trial.get('participants', 'N/A')}")
                     st.markdown(f"**Start Date:** {trial.get('start_date', 'Unknown')}")
-                    st.markdown(f"**Completion:** {trial.get('estimated_completion', 'Unknown')}")
+                    st.markdown(f"**Completion:** {trial.get('completion_date', 'Unknown')}")
                     
                     st.markdown("**Intervention:**")
                     st.write(trial.get('intervention', 'No information available'))
