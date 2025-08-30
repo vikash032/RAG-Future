@@ -4,7 +4,7 @@ import arxiv
 from typing import List, Dict, Optional
 import streamlit as st
 from datetime import datetime, timedelta
-from .config import settings
+from config import settings
 
 class APIIntegrations:
     @staticmethod
