@@ -1091,7 +1091,7 @@ def get_real_weather_data(city_name="Delhi") -> Dict:
             "wind_direction": data["wind"].get("deg", 0),
             "description": data["weather"][0]["description"].title(),
             "icon": data["weather"][0]["icon"],
-            "feels_like": round(data["main"]["feels_like", 1),
+            "feels_like": round(data["main"]["feels_like", 1]),
             "pressure": data["main"]["pressure"],
             "visibility": data.get("visibility", 10000) / 1000,
             "uv_index": data.get("uvi", 0),
