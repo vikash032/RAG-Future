@@ -30,6 +30,7 @@ streamlit==1.48.1
 chromadb
 requests
 pandas
+plotly
 schedule
 regex
 arxiv
