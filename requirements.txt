@@ -1,16 +1,19 @@
-# Core numeric & ML libraries
+# ensure typing and pydantic v2 first
+typing-extensions>=4.6.1
+pydantic>=2.7.0
+pydantic-settings==2.10.0
+
+# try newer thinc & spaCy that may be pydantic-v2-compatible
+thinc>=8.3.6
+spacy>=3.8.0
+
+# then the rest of your original file (no change)
 numpy==1.26.4
 torch==2.2.2
 torchvision==0.17.2
 torchaudio==2.2.2
-
-# SQLite fix for Chroma
 pysqlite3-binary
-
-# OpenCV for headless
 opencv-python-headless
-
-# Embeddings & Transformers
 transformers>=4.44.2
 sentence-transformers==2.2.2
 setfit==0.7.0
@@ -18,13 +21,7 @@ optimum==1.27.0
 huggingface_hub==0.23.3
 faiss-cpu==1.7.4
 onnxruntime==1.22.1
-
-# spaCy / RAG preprocessing (NumPy-1.x compatible)
-thinc==8.1.1
 blis==0.7.9
-spacy==3.4.4
-
-# Application & utility libraries
 streamlit==1.48.1
 chromadb
 requests
@@ -37,13 +34,10 @@ langchain
 unstructured[local-inference]
 pdfminer.six
 pi-heif
-pydantic==1.9.0
 pdf2image
 PyPDF2
 pillow-heif
 python-magic
 duckdb
 dlt
-
-# Custom embedding package
 git+https://github.com/FlagOpen/FlagEmbedding.git
