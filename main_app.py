@@ -492,7 +492,7 @@ class CoreFunctions:
             return []
         
         try:
-            progress_bar = st.progress(0)
+            progress_bar = st.progress(0.0)
             status_text = st.empty()
             
             with NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
@@ -500,7 +500,7 @@ class CoreFunctions:
                 tmp_path = tmp.name
 
             status_text.text("📄 Reading PDF structure...")
-            progress_bar.progress(25)
+            progress_bar.progress(0.25)
 
             with open(tmp_path, 'rb') as f:
                 pdf_reader = PyPDF2.PdfReader(f)
@@ -510,7 +510,7 @@ class CoreFunctions:
                 
                 for page_num, page in enumerate(pdf_reader.pages):
                     status_text.text(f"📖 Processing page {page_num + 1}/{total_pages}...")
-                    progress_bar.progress(25 + (50 * page_num / total_pages))
+                    progress_bar.progress(0.25 + (0.5 * page_num / total_pages))
                     
                     page_text = page.extract_text()
                     if page_text:
@@ -545,7 +545,7 @@ class CoreFunctions:
                             })
 
             status_text.text("🔍 Analyzing content...")
-            progress_bar.progress(90)
+            progress_bar.progress(0.9)
 
             # Clean up temp file
             try:
@@ -554,7 +554,7 @@ class CoreFunctions:
                 pass
 
             status_text.text("✅ PDF processing completed!")
-            progress_bar.progress(100)
+            progress_bar.progress(1.0)
             
             time.sleep(1)
             progress_bar.empty()
@@ -569,26 +569,26 @@ class CoreFunctions:
     def process_csv(self, uploaded_file) -> List[Dict]:
         """Enhanced CSV processing with data type detection and validation"""
         try:
-            progress_bar = st.progress(0)
+            progress_bar = st.progress(0.0)
             status_text = st.empty()
             
             status_text.text("📊 Reading CSV structure...")
-            progress_bar.progress(25)
+            progress_bar.progress(0.25)
             
             df = pd.read_csv(uploaded_file, encoding='utf-8')
             
             status_text.text("🔍 Analyzing data types...")
-            progress_bar.progress(50)
+            progress_bar.progress(0.5)
             
             total_rows = len(df)
             
             status_text.text("📝 Creating searchable chunks...")
-            progress_bar.progress(75)
+            progress_bar.progress(0.75)
             
             chunks = []
             for i, row in df.iterrows():
                 if i % 100 == 0:
-                    progress_bar.progress(75 + (20 * i / total_rows))
+                    progress_bar.progress(0.75 + (0.2 * i / total_rows))
                 
                 row_text_parts = []
                 for col, val in row.items():
@@ -608,7 +608,7 @@ class CoreFunctions:
                 })
 
             status_text.text("✅ CSV processing completed!")
-            progress_bar.progress(100)
+            progress_bar.progress(1.0)
             
             time.sleep(1)
             progress_bar.empty()
@@ -690,6 +690,7 @@ class CoreFunctions:
                 except:
                     n_fetch = max_results * 8
                 
+                # Fix for ChromaDB query issue - don't pass empty where clause
                 if source_filter:
                     results = collection.query(
                         query_embeddings=[query_embedding],
@@ -701,8 +702,7 @@ class CoreFunctions:
                     results = collection.query(
                         query_embeddings=[query_embedding],
                         n_results=n_fetch,
-                        include=["metadatas", "documents", "distances"],
-                        where={}
+                        include=["metadatas", "documents", "distances"]
                     )
 
                 docs = results.get("documents", [[]])[0] if results.get("documents") else []
@@ -931,14 +931,14 @@ class CoreFunctions:
                 st.error("❌ Source name is required")
                 return False
 
-            progress_bar = st.progress(0)
+            progress_bar = st.progress(0.0)
             status_text = st.empty()
             
             shard = data_type
             total_chunks = len(data)
             
             status_text.text(f"🔄 Preparing {total_chunks} chunks for ingestion...")
-            progress_bar.progress(10)
+            progress_bar.progress(0.1)
             
             texts = []
             metadatas = []
@@ -948,7 +948,7 @@ class CoreFunctions:
             
             for i, chunk in enumerate(data):
                 if i % 50 == 0:
-                    progress_bar.progress(10 + (30 * i / total_chunks))
+                    progress_bar.progress(0.1 + (0.3 * i / total_chunks))
                 
                 texts.append(chunk["text"])
                 
@@ -972,7 +972,7 @@ class CoreFunctions:
                 ids.append(f"{data_type}_{chunk_id}")
 
             status_text.text("🧠 Generating embeddings...")
-            progress_bar.progress(50)
+            progress_bar.progress(0.5)
             
             model = self.get_embedding_model()
             if model is None:
@@ -987,10 +987,10 @@ class CoreFunctions:
                 batch_embeddings = model.encode(batch_texts).tolist()
                 embeddings.extend(batch_embeddings)
                 
-                progress_bar.progress(50 + (40 * (i + len(batch_texts)) / len(texts)))
+                progress_bar.progress(0.5 + (0.4 * (i + len(batch_texts)) / len(texts)))
             
             status_text.text("💾 Storing in vector database...")
-            progress_bar.progress(95)
+            progress_bar.progress(0.95)
             
             if not self.collections or shard not in self.collections:
                 st.error("❌ Vector store collection not available. Ingestion aborted.")
@@ -1004,7 +1004,7 @@ class CoreFunctions:
             )
             
             status_text.text("✅ Ingestion completed successfully!")
-            progress_bar.progress(100)
+            progress_bar.progress(1.0)
             
             time.sleep(1)
             progress_bar.empty()
@@ -1024,88 +1024,6 @@ core = CoreFunctions()
 # ----------------------
 # Weather Functions
 # ----------------------
-def get_real_weather_data(city_name="Delhi") -> Dict:
-    try:
-        API_KEY = st.secrets.get("OPENWEATHER_API_KEY")
-    except Exception:
-        API_KEY = None
-
-    if not API_KEY:
-        st.warning("⚠️ Please set a valid OPENWEATHER_API_KEY in Streamlit secrets.")
-        return get_fallback_weather(city_name)
-
-    if city_name not in INDIAN_CITIES:
-        city_name = "Delhi"
-
-    city_coords = INDIAN_CITIES[city_name]
-    lat, lon = city_coords["lat"], city_coords["lon"]
-
-    current_url = (
-        f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}"
-        f"&appid={API_KEY}&units=metric"
-    )
-    forecast_url = (
-        f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}"
-        f"&appid={API_KEY}&units=metric&cnt=8"
-    )
-
-    try:
-        current_response = requests.get(current_url, timeout=10)
-        if current_response.status_code != 200:
-            st.error(f"❌ Weather API Error: {current_response.status_code}")
-            return get_fallback_weather(city_name)
-
-        data = current_response.json()
-        forecast_data = []
-        forecast_response = requests.get(forecast_url, timeout=10)
-        if forecast_response.status_code == 200:
-            forecast_data = forecast_response.json().get("list", [])[:6]
-
-        current_time = datetime.now()
-
-        weather_info = {
-            "city": city_name,
-            "state": city_coords.get("state", ""),
-            "temperature": round(data["main"]["temp"], 1),
-            "humidity": data["main"]["humidity"],
-            "precipitation": data.get("rain", {}).get("1h", data.get("snow", {}).get("1h", 0.0)),
-            "windspeed": round(data["wind"]["speed"] * 3.6, 1),
-            "wind_direction": data["wind"].get("deg", 0),
-            "description": data["weather"][0]["description"].title(),
-            "icon": data["weather"][0]["icon"],
-            "feels_like": round(data["main"]["feels_like"], 1),
-            "pressure": data["main"]["pressure"],
-            "visibility": data.get("visibility", 10000) / 1000,
-            "uv_index": data.get("uvi", 0),
-            "cloudiness": data["clouds"]["all"],
-            "sunrise": datetime.fromtimestamp(data["sys"]["sunrise"]).strftime("%H:%M"),
-            "sunset": datetime.fromtimestamp(data["sys"]["sunset"]).strftime("%H:%M"),
-            "time": current_time.isoformat(),
-            "location": f"{lat},{lon}",
-            "forecast": forecast_data,
-            "air_quality": "Good",
-            "text": f"""🌤️ Weather Report for {city_name}, {city_coords.get('state', '')}
-📅 Date: {current_time.strftime('%Y-%m-%d %H:%M IST')}
-🌡️ Temperature: {round(data["main"]["temp"], 1)}°C (Feels like {round(data["main"]["feels_like"], 1)}°C)
-🌈 Condition: {data["weather"][0]["description"].title()}
-💧 Humidity: {data["main"]["humidity"]}%
-🌧️ Precipitation: {data.get("rain", {}).get("1h", 0.0)}mm
-💨 Wind: {round(data["wind"]["speed"] * 3.6, 1)} km/h
-🎯 Pressure: {data["main"]["pressure"]} hPa
-👁️ Visibility: {data.get("visibility", 10000) / 1000} km
-☁️ Cloudiness: {data["clouds"]["all"]}%
-🌅 Sunrise: {datetime.fromtimestamp(data["sys"]["sunrise"]).strftime('%H:%M')}
-🌇 Sunset: {datetime.fromtimestamp(data["sys"]["sunset"]).strftime('%H:%M')}"""
-        }
-
-        return weather_info
-
-    except Exception as e:
-        st.warning(f"Weather API error: {str(e)}")
-        return get_fallback_weather(city_name)
-
-
-
 def get_fallback_weather(city_name="Delhi") -> Dict:
     """Enhanced fallback weather data"""
     current_time = datetime.now()
@@ -1699,9 +1617,9 @@ def main():
             with chat_container:
                 for message in chat_history:
                     if message["user"]:
-                        st.markdown(f"**👤 You ({message['timestamp']}):** {message['user']}")
+                        st.markdown(f"👤 You ({message['timestamp']}): {message['user']}")
                     if message["assistant"]:
-                        st.markdown(f"**🤖 Assistant ({message['timestamp']}):**")
+                        st.markdown(f"🤖 Assistant ({message['timestamp']}):")
                         st.markdown(message["assistant"])
                     st.divider()
             
@@ -1719,7 +1637,6 @@ def main():
                 st.rerun()
 
     # Tab 7: Enhanced System Dashboard
-    import pandas as pd
     with tab7:
         st.markdown("### 📊 System Dashboard")
         
@@ -1769,27 +1686,13 @@ def main():
         
         # Collection details
         st.markdown("#### 🗂️ Collection Details")
-        domain_data = stats.get("documents_by_domain", {}) if stats and isinstance(stats, dict) else {}
-
-        if domain_data:
+        if stats and stats.get("documents_by_domain"):
+            import pandas as pd
             domain_df = pd.DataFrame({
-                "Collection": list(domain_data.keys()),
-                "Documents": list(domain_data.values())
+                "Collection": list(stats["documents_by_domain"].keys()),
+                "Documents": list(stats["documents_by_domain"].values())
             })
             st.dataframe(domain_df, use_container_width=True)
-
-            # 🔥 Add a Plotly Bar Chart
-            import plotly.express as px
-            fig = px.bar(
-                domain_df,
-                x="Collection",
-                y="Documents",
-                title="📊 Documents per Collection",
-                labels={"Collection": "Collection", "Documents": "Number of Documents"},
-                 text="Documents"
-            )
-            fig.update_traces(textposition='outside')
-            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No documents in collections yet")
 
@@ -1799,7 +1702,7 @@ def main():
             source_df = pd.DataFrame({
                 "Source": list(stats["documents_by_source"].keys()),
                 "Documents": list(stats["documents_by_source"].values())
-        }) 
+            })
             st.dataframe(source_df, use_container_width=True)
         else:
             st.info("No source data available")
