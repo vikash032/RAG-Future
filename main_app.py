@@ -1341,13 +1341,13 @@ def display_system_stats():
         memory = psutil.virtual_memory()
         
         st.metric("🖥️ CPU Usage", f"{cpu_percent}%")
-        st.metric("🧠 Memory Usage", f"{memory.percent}%", f"{memory.used // (1024**3):.1f}GB / {memory.total // (1024**3):.1f}GB")
+        st.metric("🧠 Memory Usage", f"{memory.percent}%", f"{memory.used // (1024**4):.1f}GB / {memory.total // (1024**4):.1f}GB")
         
         if torch and torch.cuda.is_available():
             try:
                 gpu_memory = torch.cuda.get_device_properties(0).total_memory
                 gpu_used = torch.cuda.memory_allocated(0)
-                st.metric("🎮 GPU Memory", f"{(gpu_used/gpu_memory)*100:.1f}%", f"{gpu_used // (1024**3):.1f}GB / {gpu_memory // (1024**3):.1f}GB")
+                st.metric("🎮 GPU Memory", f"{(gpu_used/gpu_memory)*100:.1f}%", f"{gpu_used // (1024**4):.1f}GB / {gpu_memory // (1024**4):.1f}GB")
             except:
                 pass
 
